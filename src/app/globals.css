@@ -1,26 +1,193 @@
 @import "tailwindcss";
 
+/* =============================================================================
+   Habitat design tokens
+   -----------------------------------------------------------------------------
+   Semantic tokens only — components never reference raw colours. One accent
+   (sage) carries brand and primary actions; status colours are reserved for
+   meaning (overdue, expiring, done) and always paired with text or an icon.
+   ============================================================================= */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Surfaces */
+  --canvas: #f6f4ef;            /* warm off-white page background */
+  --surface: #ffffff;           /* panels, cards, inputs */
+  --surface-muted: #f0ede6;     /* hover, table header, subtle fills */
+  --surface-sunken: #e9e6de;    /* pressed, track backgrounds */
+  --overlay: rgb(28 32 30 / 0.36);
+
+  /* Lines */
+  --line: #e3dfd6;
+  --line-strong: #cdc8bc;
+  --line-input: #8f897d;        /* 3:1 against surfaces (WCAG 1.4.11) */
+
+  /* Text — all pass 4.5:1 on --surface and --canvas */
+  --fg: #1d221f;
+  --fg-muted: #555d58;
+  --fg-subtle: #5f6761;
+  --fg-inverse: #ffffff;
+
+  /* Accent: muted sage */
+  --accent: #42634f;
+  --accent-hover: #375443;
+  --accent-fg: #ffffff;
+  --accent-soft: #e4ece6;
+  --accent-soft-fg: #2c4637;
+
+  /* Status */
+  --info: #3b6177;        --info-soft: #e3ebf0;
+  --success: #3a6f4c;     --success-soft: #e1ede4;
+  --warning: #8a560b;     --warning-soft: #f5ead6;
+  --danger: #a3352c;      --danger-soft: #f6e2df;
+
+  --ring: #42634f;
+
+  /* Floor plan */
+  --plan-bg: #fbfaf7;
+  --plan-grid: #ebe8e1;
+  --plan-grid-major: #dedad1;
+  --plan-wall: #3a403c;
+  --plan-label: #2a302c;
+
+  /* Shape */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+
+  /* Elevation: borders first, then soft shadows */
+  --shadow-xs: 0 1px 2px rgb(29 34 31 / 0.05);
+  --shadow-sm: 0 1px 3px rgb(29 34 31 / 0.07), 0 1px 2px rgb(29 34 31 / 0.04);
+  --shadow-md: 0 6px 16px -4px rgb(29 34 31 / 0.10), 0 2px 4px -2px rgb(29 34 31 / 0.06);
+  --shadow-lg: 0 18px 48px -12px rgb(29 34 31 / 0.22), 0 4px 12px -4px rgb(29 34 31 / 0.08);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-input: var(--line-input);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-inverse: var(--fg-inverse);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-fg: var(--accent-soft-fg);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ring: var(--ring);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  --font-sans: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* Type scale (size / line-height). Base UI text is 14px. */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 22px;
+  --text-md: 15px;
+  --text-md--line-height: 22px;
+  --text-lg: 17px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 32px;
+  --text-3xl--line-height: 38px;
+  --text-4xl: 44px;
+  --text-4xl--line-height: 50px;
+
+  --ease-out: var(--ease-out);
+  --animate-fade-in: fade-in var(--dur-base) var(--ease-out);
+  --animate-rise-in: rise-in var(--dur-slow) var(--ease-out);
+  --animate-slide-in-right: slide-in-right var(--dur-slow) var(--ease-out);
+  --animate-slide-in-bottom: slide-in-bottom var(--dur-slow) var(--ease-out);
+  --animate-pop-in: pop-in var(--dur-base) var(--ease-out);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+@keyframes slide-in-right { from { transform: translateX(16px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes slide-in-bottom { from { transform: translateY(16px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.98) } to { opacity: 1; transform: none } }
+@keyframes shimmer { from { background-position: -200px 0 } to { background-position: calc(200px + 100%) 0 } }
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::selection { background: var(--accent-soft); color: var(--accent-soft-fg); }
+
+  /* One consistent, high-contrast focus ring for keyboard users. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 0; }
+
+  h1, h2, h3, h4 { letter-spacing: -0.01em; text-wrap: balance; }
+  p { text-wrap: pretty; }
+
+  [data-numeric], .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface-muted) 0, var(--surface-sunken) 40px, var(--surface-muted) 80px);
+    background-size: 200px 100%;
+    animation: shimmer 1.4s linear infinite;
+    border-radius: var(--radius-sm);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
