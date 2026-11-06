@@ -1,6 +1,6 @@
 # Habitat
 
-**Your home, organised and understood.** Habitat is a digital twin for your home: an interactive floor plan connected to your appliances, warranties, maintenance, documents, expenses and household members — one coherent data model, private to your household.
+**Your home, organised and understood.** Habitat lets you draw your own home like a CAD program — walls, doors, windows, rooms and dimensions in 2D, with a live 3D view — and connects that drawing to your appliances, warranties, maintenance, documents and expenses. One coherent data model, private to your household.
 
 Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` dates) with an architecture that works anywhere.
 
@@ -11,7 +11,10 @@ Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` d
 | Sign up / sign in (local auth, or Supabase Auth when configured) | ✅ |
 | Guided onboarding (home → layout template → first appliance → explore), progress persisted | ✅ |
 | Overview dashboard from real records, every metric links to a filtered view | ✅ |
-| Interactive 2D floor plan: templates, view/edit modes, drag, resize, snap & alignment guides, furniture, undo/redo, keyboard control, save with conflict detection | ✅ |
+| **CAD-style drafting**: wall tool with typed lengths (3.2, 320cm, 3m20), object snaps (endpoint, midpoint, on-wall, tracking), ortho (F8), grid (F7), snap (F3), joined corners, T-junctions, doors/windows/openings in walls, polygon rooms with live area, dimensions, text, measure, command line + X/Y readout, layers | ✅ |
+| Live 3D view from the same drawing (real door/window openings, cutaway), side-by-side with 2D | ✅ |
+| Multiple levels; export DXF (AutoCAD, mm) and PNG | ✅ |
+| Starter templates converted to editable walls; "Draw it yourself" is the default | ✅ |
 | Appliance drawer on the plan backed by the live asset record | ✅ |
 | Appliances & assets: CRUD, search, filters, sort, grid/list, archive, delete with retention policy | ✅ |
 | Warranties: expiry tracking, configurable reminder window, receipts linked as proof | ✅ |

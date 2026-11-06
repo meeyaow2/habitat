@@ -26,6 +26,9 @@ Key behaviours:
 - The last owner of a household with other members cannot be removed or demoted; a household with no members is deleted automatically.
 - Invitations store only a SHA-256 of the token, are bound to the invited email, expire after 7 days and are single-use (`accept_invitation` RPC).
 
+## Drafting model
+`floors.geometry` (JSONB, Zod-validated, size-limited) holds walls, openings, dimensions and text, saved atomically with the floor's optimistic `version`. Rooms stay relational with an optional `polygon`. `features/home/cad.ts` is the pure geometry engine (snapping, wall edits, rooms→walls, DXF); `canvas.tsx` renders tools; `home-twin.tsx` is the workspace; `viewer-3d.tsx` builds 3D from the same document.
+
 ## AI
 `src/lib/ai/provider.ts` defines the seam; `anthropic.ts` is the only file importing the SDK. Both features require `AI_PROVIDER` + key **and** per-person consent (`profiles.ai_consent_at`).
 - **Extraction** (`lib/ai/extraction.ts`): structured output (`betaZodOutputFormat`) where every field carries `status` + verbatim `evidence`; `normaliseExtraction` enforces deterministic rules server-side; results are stored in `document_extractions` and applied only through the normal asset services after review. The document is treated as untrusted data in the system prompt; output can only populate a review form.
