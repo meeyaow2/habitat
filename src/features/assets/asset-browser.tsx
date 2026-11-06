@@ -114,7 +114,7 @@ export function AssetBrowser({
       )}
 
       {/* Toolbar */}
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-subtle" aria-hidden />
           <label htmlFor="asset-search" className="sr-only">Search items</label>
@@ -174,7 +174,7 @@ export function AssetBrowser({
             { value: "list", label: <span className="sr-only sm:not-sr-only">List</span>, icon: <List aria-hidden />, ariaLabel: "List view" },
             { value: "grid", label: <span className="sr-only sm:not-sr-only">Grid</span>, icon: <Grid2x2 aria-hidden />, ariaLabel: "Grid view" },
           ]}
-          className="self-start lg:self-auto"
+          className="self-start xl:self-auto"
         />
       </div>
 

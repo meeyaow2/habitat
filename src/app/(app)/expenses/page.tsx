@@ -99,7 +99,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
 
             <Panel className="overflow-hidden">
               <PanelHeader title="All expenses" description={`${rows.length} in ${range.label.toLowerCase()}`} />
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
                   <caption className="sr-only">Expenses</caption>
                   <thead className="border-y border-line bg-surface-muted/60 text-left text-xs text-fg-muted">

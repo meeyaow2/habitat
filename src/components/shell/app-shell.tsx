@@ -103,12 +103,13 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
               type="button"
               onClick={toggle}
               className="hidden h-8 items-center gap-3 rounded-md px-2.5 text-xs text-fg-subtle hover:bg-surface-muted hover:text-fg lg:flex"
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? "Expand sidebar" : undefined}
+              aria-keyshortcuts="Control+Backslash"
             >
               {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
               {!collapsed && (
                 <span className="flex flex-1 justify-between">
-                  Collapse <kbd className="font-mono text-[10px]">Ctrl \</kbd>
+                  Collapse<span className="sr-only"> sidebar</span> <kbd className="font-mono text-[10px]" aria-hidden>Ctrl \</kbd>
                 </span>
               )}
             </button>
@@ -222,7 +223,6 @@ function HouseholdSwitcher({
           "flex min-w-0 items-center gap-2 rounded-md p-1 text-left hover:bg-surface-muted",
           !compact && !collapsed && "lg:flex-1 lg:px-1.5",
         )}
-        aria-label={`Household: ${household.name}. Switch household`}
       >
         <BrandMark className="size-7 shrink-0" />
         <span className={cn("min-w-0 flex-1", compact ? "" : collapsed ? "hidden" : "hidden lg:block")}>
@@ -230,6 +230,7 @@ function HouseholdSwitcher({
           <span className="block text-[11px] leading-3 text-fg-subtle">Habitat</span>
         </span>
         <ChevronsUpDown className={cn("size-3.5 shrink-0 text-fg-subtle", compact ? "" : collapsed ? "hidden" : "hidden lg:block")} aria-hidden />
+        <span className="sr-only">{compact || collapsed ? household.name : ""} — switch household</span>
       </MenuTrigger>
       <MenuContent align="start" className="w-64">
         <MenuLabel>Households</MenuLabel>
@@ -256,7 +257,6 @@ function UserMenu({ user, collapsed, compact }: { user: ShellProps["user"]; coll
     <Menu>
       <MenuTrigger
         className={cn("flex h-10 min-w-0 items-center gap-2.5 rounded-md px-1.5 text-left hover:bg-surface-muted", compact && "h-9 px-0.5")}
-        aria-label={`Account: ${user.name}`}
       >
         <Avatar name={user.name} colour={user.colour} size="sm" />
         {!compact && (
@@ -265,6 +265,7 @@ function UserMenu({ user, collapsed, compact }: { user: ShellProps["user"]; coll
             <span className="block truncate text-[11px] leading-3 text-fg-subtle">{user.isDemo ? "Demo visitor" : user.email}</span>
           </span>
         )}
+        <span className="sr-only">{compact || collapsed ? user.name : ""} account menu</span>
       </MenuTrigger>
       <MenuContent align={compact ? "end" : "start"} side={compact ? "bottom" : "top"} className="w-56">
         <MenuLabel className="truncate">{user.isDemo ? "Demo visitor" : user.email}</MenuLabel>

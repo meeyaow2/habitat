@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Habitat
 
-## Getting Started
+**Your home, organised and understood.** Habitat is a digital twin for your home: an interactive floor plan connected to your appliances, warranties, maintenance, documents, expenses and household members — one coherent data model, private to your household.
 
-First, run the development server:
+Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` dates) with an architecture that works anywhere.
+
+## What works today
+
+| Area | Status |
+| --- | --- |
+| Sign up / sign in (local auth, or Supabase Auth when configured) | ✅ |
+| Guided onboarding (home → layout template → first appliance → explore), progress persisted | ✅ |
+| Overview dashboard from real records, every metric links to a filtered view | ✅ |
+| Interactive 2D floor plan: templates, view/edit modes, drag, resize, snap & alignment guides, furniture, undo/redo, keyboard control, save with conflict detection | ✅ |
+| Appliance drawer on the plan backed by the live asset record | ✅ |
+| Appliances & assets: CRUD, search, filters, sort, grid/list, archive, delete with retention policy | ✅ |
+| Warranties: expiry tracking, configurable reminder window, receipts linked as proof | ✅ |
+| Maintenance: recurring tasks, assignment, completion with cost, history, calendar, labelled general-guidance suggestions | ✅ |
+| Documents: private uploads (PDF/images, magic-byte validated), preview, metadata, linking, signed URLs | ✅ |
+| Expenses: ledger, filters, analytics, CSV export (formula-injection safe) | ✅ |
+| Household: roles, email-bound invitations (hashed, expiring, revocable), shared activity | ✅ |
+| Settings: profile, reminder window, AI consent, JSON data export, account deletion | ✅ |
+| Demo mode (isolated, anonymous, auto-expiring sample household) | ✅ |
+| 3D preview generated from the 2D plan | ✅ (basic) |
+| AI receipt extraction & Ask Habitat assistant | ❌ Not built yet — see roadmap |
+
+See [docs/STATUS.md](docs/STATUS.md) for verified behaviour and known limitations, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
+
+## Quick start (local, no external services)
+
+Requirements: Node 20.11+, PostgreSQL 15+ (16 tested).
 
 ```bash
+npm install
+cp .env.example .env.local        # set DATABASE_URL and a random SESSION_SECRET
+npm run db:migrate                # applies db/local-compat.sql + supabase/migrations
+npm run db:seed                   # optional: dev@habitat.local / habitat-dev-password
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 — or click **Explore a sample home** for demo mode.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+A quick local Postgres with Docker:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+docker run -d --name habitat-pg -e POSTGRES_PASSWORD=postgres -p 54322:5432 postgres:16
+```
 
-## Learn More
+## Using Supabase
 
-To learn more about Next.js, take a look at the following resources:
+1. Create a project. Apply the migrations with the Supabase CLI (`supabase link` then `supabase db push`). These are the same files the local runner uses; the auth shim is never applied to Supabase.
+2. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server-only), and `DATABASE_URL` (use the **transaction pooler** string for Vercel).
+3. Enable **anonymous sign-ins** in Auth settings if you want demo mode.
+4. The storage migration creates a private `household-documents` bucket with member-only policies.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+> The Supabase adapters are implemented but were **not exercised against a live Supabase project** in development (the build environment could not reach Supabase). The local mode, which shares the same migrations and RLS, is fully tested.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Scripts
 
-## Deploy on Vercel
+| Command | What it does |
+| --- | --- |
+| `npm run dev` / `build` / `start` | Next.js |
+| `npm run typecheck` / `lint` | TypeScript and ESLint |
+| `npm run test:unit` | Business-logic unit tests (Vitest) |
+| `npm run test:db` | RLS and service integration tests against `habitat_test` |
+| `npm run test:e2e` | Playwright journeys against a production build and `habitat_e2e` |
+| `npm run db:migrate` / `db:reset` / `db:seed` / `db:cleanup-demo` | Database tooling (`reset` refuses non-local hosts) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`TEST_DATABASE_URL` and `E2E_DATABASE_URL` override the default test databases (names must end in `_test` / `_e2e`).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Deployment (Vercel + Supabase)
+
+Set the environment variables above in Vercel, deploy, and schedule `npm run db:cleanup-demo` (or call `public.cleanup_expired_demo_accounts()` from a Supabase cron) to remove demo accounts after 24 hours. The in-memory rate limiter is per instance; use a shared store (e.g. Upstash) for multi-instance deployments.
+
+## Project layout
+
+```
+supabase/migrations   schema, RLS policies, RPCs, reference data, storage policies
+db/local-compat.sql   minimal Supabase auth shim for plain Postgres
+scripts/              migration runner and dev seed
+src/app               routes (marketing, auth, onboarding, (app)/*, api/*)
+src/features/*        feature modules: queries, server services, actions, UI
+src/lib               db (RLS transactions), auth adapters, storage, domain logic, validation
+src/components        design-system primitives and the app shell
+tests/                unit, db (RLS), e2e (Playwright)
+```

@@ -37,10 +37,10 @@ export default async function SettingsPage() {
         <Panel>
           <PanelHeader title="Privacy & data" description="Habitat never asks for your street address. Floor plans and documents are never public." />
           <div className="px-4 pb-5 sm:px-5"><DataControls isDemo={ctx.profile.is_demo} /></div>
-          <dl className="grid grid-cols-1 gap-1 border-t border-line px-4 py-3 text-xs text-fg-subtle sm:grid-cols-2 sm:px-5">
-            <div>Sign-in: {authMode() === "supabase" ? "Supabase Auth" : "Local accounts"}</div>
-            <div>Document storage: {storageMode() === "supabase" ? "Supabase Storage (private bucket)" : "Private server storage"}</div>
-          </dl>
+          <ul className="grid grid-cols-1 gap-1 border-t border-line px-4 py-3 text-xs text-fg-subtle sm:grid-cols-2 sm:px-5">
+            <li>Sign-in: {authMode() === "supabase" ? "Supabase Auth" : "Local accounts"}</li>
+            <li>Document storage: {storageMode() === "supabase" ? "Supabase Storage (private bucket)" : "Private server storage"}</li>
+          </ul>
         </Panel>
       </div>
     </div>
