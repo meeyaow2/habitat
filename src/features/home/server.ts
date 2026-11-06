@@ -1,10 +1,11 @@
 import "server-only";
 import type { Tx } from "@/lib/db";
 import { UserFacingError } from "@/lib/server/errors";
-import { centre, objectBounds, roomAt, validateDoc, type FloorDoc, type PlanObject, type RoomShape } from "./model";
+import { centre, objectBounds, roomAt, validateDoc, withPolygon, type FloorDoc, type PlanObject, type RoomShape } from "./model";
+import { EMPTY_GEOMETRY, type Geometry } from "./cad";
 import { floorExtent, getTemplate, instantiateFloor, type TemplateKey } from "./templates";
 
-export type FloorRow = { id: string; name: string; level: number; version: number; width_cm: number; depth_cm: number };
+export type FloorRow = { id: string; name: string; level: number; version: number; width_cm: number; depth_cm: number; wall_height_cm: number };
 
 export type PropertyRow = {
   id: string;
@@ -42,12 +43,13 @@ export async function applyTemplate(tx: Tx, householdId: string, propertyId: str
   await tx`delete from floors where property_id = ${propertyId} and household_id = ${householdId}`;
   for (const floor of template.floors) {
     const extent = floorExtent(floor);
+    const doc = instantiateFloor(floor);
     const [f] = await tx<{ id: string }[]>`
-      insert into floors (household_id, property_id, name, level, width_cm, depth_cm)
-      values (${householdId}, ${propertyId}, ${floor.name}, ${floor.level}, ${extent.widthCm}, ${extent.depthCm})
+      insert into floors (household_id, property_id, name, level, width_cm, depth_cm, geometry)
+      values (${householdId}, ${propertyId}, ${floor.name}, ${floor.level}, ${extent.widthCm}, ${extent.depthCm}, ${tx.json(doc.geometry as never)})
       returning id
     `;
-    await writeDoc(tx, householdId, f.id, instantiateFloor(floor));
+    await writeDoc(tx, householdId, f.id, doc);
   }
   await tx`update properties set template_key = ${key}, layout_accuracy = 'illustrative' where id = ${propertyId}`;
 }
@@ -67,6 +69,7 @@ async function writeDoc(tx: Tx, householdId: string, floorId: string, doc: Floor
           width: r.width,
           height: r.height,
           sort_order: r.sortOrder,
+          polygon: r.polygon ? tx.json(r.polygon as never) : null,
         })),
       )}
     `;
@@ -107,21 +110,22 @@ export async function getPrimaryProperty(tx: Tx, householdId: string): Promise<P
 
 export async function getFloors(tx: Tx, propertyId: string): Promise<FloorRow[]> {
   return [...(await tx<FloorRow[]>`
-    select id, name, level, version, width_cm, depth_cm from floors
+    select id, name, level, version, width_cm, depth_cm, wall_height_cm from floors
     where property_id = ${propertyId} order by level
   `)];
 }
 
 export async function loadFloorDoc(tx: Tx, floorId: string): Promise<FloorDoc> {
   const rooms = await tx<RoomShape[]>`
-    select id, name, room_type as "roomType", x, y, width, height, sort_order as "sortOrder"
+    select id, name, room_type as "roomType", x, y, width, height, sort_order as "sortOrder", polygon
     from rooms where floor_id = ${floorId} order by sort_order, created_at
   `;
+  const [floor] = await tx<{ geometry: Geometry }[]>`select geometry from floors where id = ${floorId}`;
   const objects = await tx<PlanObject[]>`
     select id, kind, asset_id as "assetId", furniture_type as "furnitureType", label, x, y, width, height, rotation
     from floor_plan_objects where floor_id = ${floorId} order by created_at
   `;
-  return { rooms: [...rooms], objects: [...objects] };
+  return { rooms: [...rooms], objects: [...objects], geometry: { ...EMPTY_GEOMETRY, ...(floor?.geometry ?? {}) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +145,7 @@ export async function saveFloorDoc(
 
   // Lock the floor and check nobody saved in between.
   const [floor] = await tx<{ version: number }[]>`
-    update floors set version = version + 1
+    update floors set version = version + 1, geometry = ${tx.json((doc.geometry ?? EMPTY_GEOMETRY) as never)}
     where id = ${floorId} and household_id = ${householdId} and version = ${baseVersion}
     returning version
   `;
@@ -166,9 +170,10 @@ export async function saveFloorDoc(
   const roomIds = doc.rooms.map((r) => r.id);
   if (roomIds.length) {
     await tx`delete from rooms where floor_id = ${floorId} and id not in ${tx(roomIds)}`;
+    const rooms = doc.rooms.map((r) => (r.polygon && r.polygon.length >= 3 ? withPolygon(r, r.polygon) : r));
     await tx`
       insert into rooms ${tx(
-        doc.rooms.map((r, i) => ({
+        rooms.map((r, i) => ({
           id: r.id,
           household_id: householdId,
           floor_id: floorId,
@@ -179,11 +184,12 @@ export async function saveFloorDoc(
           width: r.width,
           height: r.height,
           sort_order: i,
+          polygon: r.polygon ? tx.json(r.polygon as never) : null,
         })),
       )}
       on conflict (id) do update set
         name = excluded.name, room_type = excluded.room_type, x = excluded.x, y = excluded.y,
-        width = excluded.width, height = excluded.height, sort_order = excluded.sort_order
+        width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, polygon = excluded.polygon
       where rooms.floor_id = excluded.floor_id
     `;
   } else {

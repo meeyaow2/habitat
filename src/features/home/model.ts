@@ -2,17 +2,22 @@
  * Floor-plan document model and geometry. Pure functions only — shared by the
  * editor, the server save action, templates and tests.
  *
- * Units are centimetres. Rooms are axis-aligned rectangles (x, y = top-left).
+ * Units are centimetres. Rooms are polygons; x/y/width/height hold the
+ * polygon's bounding box (kept in sync by `withPolygon`).
  * Objects are rectangles that rotate in 90° steps around their centre.
  */
 export type RoomType =
   | "living" | "dining" | "kitchen" | "bedroom" | "bathroom" | "balcony" | "utility"
   | "study" | "storage" | "corridor" | "household_shelter" | "garden" | "garage" | "other";
 
+import { bbox, EMPTY_GEOMETRY, isSimplePolygon, pointInPolygon, polygonArea, rectPolygon, type Geometry, type Pt } from "./cad";
+
 export type RoomShape = {
   id: string;
   name: string;
   roomType: RoomType;
+  /** Outline; null/absent means the bounding rectangle. */
+  polygon?: Pt[] | null;
   x: number;
   y: number;
   width: number;
@@ -35,7 +40,27 @@ export type PlanObject = {
   rotation: number; // 0 | 90 | 180 | 270
 };
 
-export type FloorDoc = { rooms: RoomShape[]; objects: PlanObject[] };
+export type FloorDoc = { rooms: RoomShape[]; objects: PlanObject[]; geometry: Geometry };
+
+export function emptyDoc(): FloorDoc {
+  return { rooms: [], objects: [], geometry: { ...EMPTY_GEOMETRY } };
+}
+
+/** A room's outline, whether stored as a polygon or a legacy rectangle. */
+export function roomPolygon(r: Pick<RoomShape, "x" | "y" | "width" | "height" | "polygon">): Pt[] {
+  return r.polygon && r.polygon.length >= 3 ? r.polygon : rectPolygon(r);
+}
+
+/** Replace a room's outline and keep its bounding box in sync. */
+export function withPolygon<T extends RoomShape>(r: T, pts: Pt[]): T {
+  const b = bbox(pts);
+  return { ...r, polygon: pts, x: b.x, y: b.y, width: b.width, height: b.height };
+}
+
+/** Translate a room (outline and box). */
+export function moveRoom<T extends RoomShape>(r: T, dx: number, dy: number): T {
+  return withPolygon(r, roomPolygon(r).map((p) => ({ x: Math.round((p.x + dx) * 10) / 10, y: Math.round((p.y + dy) * 10) / 10 })));
+}
 
 export type Rect = { x: number; y: number; width: number; height: number };
 
@@ -93,8 +118,9 @@ export function snap(value: number, step = GRID_CM): number {
   return Math.round(value / step) * step;
 }
 
-export function areaM2(r: { width: number; height: number }): number {
-  return Math.round(((r.width * r.height) / 10_000) * 10) / 10;
+export function areaM2(r: { width: number; height: number; x?: number; y?: number; polygon?: Pt[] | null }): number {
+  const cm2 = r.polygon && r.polygon.length >= 3 ? polygonArea(r.polygon) : r.width * r.height;
+  return Math.round((cm2 / 10_000) * 10) / 10;
 }
 
 /** Bounding box of an object after its 90°-step rotation about its centre. */
@@ -118,7 +144,8 @@ export function contains(r: Rect, p: { x: number; y: number }) {
 export function roomAt(rooms: RoomShape[], p: { x: number; y: number }): RoomShape | null {
   let best: RoomShape | null = null;
   for (const room of rooms) {
-    if (contains(room, p) && (!best || room.width * room.height < best.width * best.height)) best = room;
+    const inside = room.polygon && room.polygon.length >= 3 ? pointInPolygon(p, room.polygon) : contains(room, p);
+    if (inside && (!best || areaM2(room) < areaM2(best))) best = room;
   }
   return best;
 }
@@ -218,5 +245,16 @@ export function validateDoc(doc: FloorDoc): string[] {
       assetIds.add(o.assetId);
     }
   }
+  for (const r of doc.rooms) {
+    if (r.polygon && r.polygon.length >= 3 && !isSimplePolygon(r.polygon)) errors.push(`${r.name}’s outline crosses itself`);
+  }
+  const g = doc.geometry ?? EMPTY_GEOMETRY;
+  const wallIds = new Set(g.walls.map((w) => w.id));
+  for (const w of g.walls) {
+    if (ids.has(w.id)) errors.push(`Duplicate id ${w.id}`);
+    ids.add(w.id);
+    if (Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) < 1) errors.push("A wall has no length");
+  }
+  for (const o of g.openings) if (!wallIds.has(o.wallId)) errors.push("A door or window isn’t on a wall");
   return errors;
 }

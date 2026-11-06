@@ -1,4 +1,5 @@
 import { furnitureSpec, newId, type FloorDoc, type PlanObject, type RoomShape, type RoomType } from "./model";
+import { rectPolygon, wallsFromPolygons } from "./cad";
 
 /**
  * Starter layouts. These are ILLUSTRATIVE arrangements to get people started
@@ -26,7 +27,7 @@ export type HomeTemplate = {
 const M = 100; // metres → cm
 
 function room(name: string, type: RoomType, x: number, y: number, w: number, h: number, furniture?: TemplateFurniture[]): TemplateRoom {
-  return { name, type, x: x * M, y: y * M, w: w * M, h: h * M, furniture };
+  return { name, type, x: Math.round(x * M), y: Math.round(y * M), w: Math.round(w * M), h: Math.round(h * M), furniture };
 }
 
 const bed = (type = "bed_double"): TemplateFurniture => ({ type, at: "centre" });
@@ -298,11 +299,14 @@ export function instantiateFloor(floor: TemplateFloor): FloorDoc {
     width: r.w,
     height: r.h,
     sortOrder: i,
+    polygon: rectPolygon({ x: r.x, y: r.y, width: r.w, height: r.h }),
   }));
   const objects: PlanObject[] = floor.rooms.flatMap((r) =>
     (r.furniture ?? []).map((f) => placeFurniture(r, f)).filter((o): o is PlanObject => o !== null),
   );
-  return { rooms, objects };
+  // Walls are generated from the room outlines so the plan is immediately editable as a drawing.
+  const walls = wallsFromPolygons(rooms.map((r) => r.polygon!), newId);
+  return { rooms, objects, geometry: { walls, openings: [], dimensions: [], labels: [] } };
 }
 
 /** Canvas extent for a floor, with breathing room around the rooms. */

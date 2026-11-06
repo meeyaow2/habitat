@@ -4,7 +4,7 @@ import { alignRect, areaM2, boundsOf, objectBounds, roomAt, snap, validateDoc, t
 import { floorExtent, instantiateFloor, suggestedTemplate, TEMPLATES } from "@/features/home/templates";
 
 const room = (id: string, x: number, y: number, w: number, h: number): RoomShape => ({ id, name: id, roomType: "other", x, y, width: w, height: h, sortOrder: 0 });
-const doc = (rooms: RoomShape[] = [], objects: PlanObject[] = []): FloorDoc => ({ rooms, objects });
+const doc = (rooms: RoomShape[] = [], objects: PlanObject[] = []): FloorDoc => ({ rooms, objects, geometry: { walls: [], openings: [], dimensions: [], labels: [] } });
 
 describe("geometry", () => {
   it("snaps to the grid", () => {

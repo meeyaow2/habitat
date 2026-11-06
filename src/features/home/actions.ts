@@ -22,6 +22,7 @@ const roomSchema = z.object({
   width: size(50, 20_000),
   height: size(50, 20_000),
   sortOrder: z.number().int(),
+  polygon: z.array(z.object({ x: coord, y: coord })).min(3).max(200).nullable().optional(),
 });
 
 const objectSchema = z.object({
@@ -37,10 +38,32 @@ const objectSchema = z.object({
   rotation: z.number().refine((r) => r % 90 === 0, { error: "Rotation must be in 90° steps." }),
 });
 
+const pt = z.object({ x: coord, y: coord });
+const geometrySchema = z.object({
+  walls: z.array(z.object({ id, a: pt, b: pt, thickness: size(2, 100) })).max(2000),
+  openings: z
+    .array(
+      z.object({
+        id,
+        wallId: id,
+        kind: z.enum(["door", "window", "opening"]),
+        offset: z.number().finite().min(0).max(50_000),
+        width: size(30, 1000),
+        flip: z.boolean(),
+        hingeEnd: z.boolean(),
+        height: size(30, 600),
+        sill: z.number().finite().min(0).max(500),
+      }),
+    )
+    .max(1000),
+  dimensions: z.array(z.object({ id, a: pt, b: pt, offset: z.number().finite().min(-2000).max(2000) })).max(1000),
+  labels: z.array(z.object({ id, at: pt, text: z.string().trim().min(1).max(80), size: size(6, 200) })).max(500),
+});
+
 const saveSchema = z.object({
   floorId: id,
   baseVersion: z.number().int().min(1),
-  doc: z.object({ rooms: z.array(roomSchema).max(200), objects: z.array(objectSchema).max(1000) }),
+  doc: z.object({ rooms: z.array(roomSchema).max(200), objects: z.array(objectSchema).max(1000), geometry: geometrySchema }),
 });
 
 export const saveFloorAction = householdAction(saveSchema, async ({ input, tx, ctx }) => {
@@ -51,7 +74,7 @@ export const saveFloorAction = householdAction(saveSchema, async ({ input, tx, c
     action: "layout.saved",
     entityType: "floor",
     entityId: input.floorId,
-    summary: `updated the floor plan (${input.doc.rooms.length} rooms, ${input.doc.objects.filter((o) => o.kind === "asset").length} items placed)`,
+    summary: `updated the floor plan (${input.doc.geometry.walls.length} walls, ${input.doc.rooms.length} rooms, ${input.doc.objects.filter((o) => o.kind === "asset").length} items placed)`,
   });
   refresh();
   return result;

@@ -61,7 +61,7 @@ export async function seedDemoHousehold(tx: Tx, userId: string, opts: { name?: s
     objects.push({ id: crypto.randomUUID(), kind: "asset", assetId: assetIds[it.name], furnitureType: null, label: null, x: cx - size / 2, y: cy - size / 2, width: size, height: size, rotation: 0 });
     if (!roomAt(doc.rooms, { x: cx, y: cy })) throw new Error(`Seed marker for ${it.name} is outside any room`);
   }
-  await saveFloorDoc(tx, householdId, floor.id, floor.version, { rooms: doc.rooms, objects });
+  await saveFloorDoc(tx, householdId, floor.id, floor.version, { ...doc, objects });
 
   // Maintenance: mix of overdue, due soon, upcoming and history.
   await createTask(tx, actor, { title: "Clean air filters", description: null, assetId: assetIds["Living room aircon"], assignedTo: userId, dueOn: d(-3), priority: "normal", recurrenceInterval: 1, recurrenceUnit: "month", source: "general_guidance" });
