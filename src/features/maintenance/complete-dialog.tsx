@@ -9,6 +9,7 @@ import { addInterval, formatDate, todayIn, type IntervalUnit } from "@/lib/domai
 import { useAction } from "@/lib/client/use-action";
 import type { AssetOption } from "@/features/shared/options";
 import { completeTaskAction, recordEventAction } from "./actions";
+import { useOnChange, useOnOpen } from "@/lib/client/use-on-change";
 
 export type CompletableTask = {
   id: string;
@@ -33,14 +34,14 @@ export function CompleteTaskDialog({
   const [cost, setCost] = React.useState("");
   const [vendor, setVendor] = React.useState("");
   const [notes, setNotes] = React.useState("");
-  React.useEffect(() => {
-    if (task) {
+  useOnChange(task, (t) => {
+    if (t) {
       setPerformedOn(todayIn());
       setCost("");
       setVendor("");
       setNotes("");
     }
-  }, [task]);
+  });
   const complete = useAction(completeTaskAction, {
     success: (d) => (d.nextDueOn ? `Done. Next one due ${formatDate(d.nextDueOn)}` : "Task completed"),
   });
@@ -111,9 +112,7 @@ export function RecordEventDialog({
     [defaultAssetId, defaultKind],
   );
   const [v, setV] = React.useState(blank);
-  React.useEffect(() => {
-    if (open) setV(blank());
-  }, [open, blank]);
+  useOnOpen(open, () => setV(blank()));
   const rec = useAction(recordEventAction, { success: "Recorded in service history" });
   const set = (k: keyof typeof v, val: string) => setV((s) => ({ ...s, [k]: val }));
 

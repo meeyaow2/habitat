@@ -9,6 +9,7 @@ import { Input, NativeSelect } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { areaM2, FURNITURE_TYPES, ROOM_TYPES, type FloorDoc, type PlanObject, type RoomShape, type RoomType } from "./model";
 import type { Selection } from "./canvas";
+import { useOnChange } from "@/lib/client/use-on-change";
 
 export type TwinAsset = {
   id: string;
@@ -113,7 +114,7 @@ export function LayersPanel({ doc, selection, onSelect, assetName }: { doc: Floo
 
 function CommitInput({ value, onCommit, label, id, type = "text", step, min, suffix }: { value: string; onCommit: (v: string) => void; label: string; id: string; type?: string; step?: string; min?: string; suffix?: string }) {
   const [draft, setDraft] = React.useState(value);
-  React.useEffect(() => setDraft(value), [value]);
+  useOnChange(value, (v) => setDraft(v));
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-xs font-medium text-fg-muted">{label}</label>

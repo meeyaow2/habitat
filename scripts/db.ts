@@ -13,6 +13,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
+import { pgTypes } from "../src/lib/db/types";
 
 const root = path.resolve(import.meta.dirname, "..");
 const url = process.env.DATABASE_URL;
@@ -21,7 +22,7 @@ if (!url) {
   process.exit(1);
 }
 
-const sql = postgres(url, { max: 1, onnotice: () => {}, prepare: false });
+const sql = postgres(url, { max: 1, onnotice: () => {}, prepare: false, types: pgTypes });
 
 async function hasSchema(name: string) {
   const rows = await sql`select 1 from pg_namespace where nspname = ${name}`;

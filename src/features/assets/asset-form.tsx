@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { roomLabel, type RoomOption } from "@/features/shared/options";
 import { createAssetAction, updateAssetAction } from "./actions";
 import { emptyAsset, type AssetFormValues } from "./form-values";
+import { useOnOpen } from "@/lib/client/use-on-change";
 
 export { emptyAsset, assetToForm, type AssetFormValues } from "./form-values";
 
@@ -201,10 +202,7 @@ export function AssetFormDialog({
 }) {
   const mode = assetId ? "edit" : "create";
   const [values, setValues] = React.useState<AssetFormValues>(initial ?? emptyAsset());
-  React.useEffect(() => {
-    if (open) setValues(initial ?? emptyAsset());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => setValues(initial ?? emptyAsset()));
   const set = <K extends keyof AssetFormValues>(k: K, v: AssetFormValues[K]) => setValues((s) => ({ ...s, [k]: v }));
 
   const create = useAction(createAssetAction, { success: () => `Added ${values.name || "item"}` });

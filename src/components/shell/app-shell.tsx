@@ -13,6 +13,7 @@ import { signOutAction } from "@/features/auth/actions";
 import { cn } from "@/lib/utils";
 import { isActive, NAV } from "./nav";
 import { setSidebarCollapsedAction, switchHouseholdAction } from "./shell-actions";
+import { useOnChange } from "@/lib/client/use-on-change";
 
 export type ShellProps = {
   user: { name: string; colour: string; email: string | null; isDemo: boolean };
@@ -45,7 +46,7 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
     return () => window.removeEventListener("keydown", onKey);
   }, [toggle]);
 
-  React.useEffect(() => setMoreOpen(false), [pathname]);
+  useOnChange(pathname, () => setMoreOpen(false));
 
   return (
     <div className="flex min-h-dvh flex-col">

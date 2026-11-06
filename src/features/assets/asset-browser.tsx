@@ -49,9 +49,11 @@ export function AssetBrowser({
   const [q, setQ] = React.useState(params.get("q") ?? "");
   const [view, setView] = React.useState<"list" | "grid">("list");
 
+  // Remembered per browser; read after hydration so server and client markup match.
   React.useEffect(() => {
     try {
       const saved = localStorage.getItem("habitat.assets.view");
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is client-only
       if (saved === "grid" || saved === "list") setView(saved);
     } catch {}
   }, []);

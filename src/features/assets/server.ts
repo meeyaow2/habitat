@@ -44,7 +44,10 @@ export async function createAsset(tx: Tx, a: Actor, input: AssetInput): Promise<
     action: "asset.created",
     entityType: "asset",
     entityId: asset.id,
-    summary: `added ${input.name} (${category(input.categoryId).label.toLowerCase()})`,
+    summary:
+      input.name.toLowerCase() === category(input.categoryId).label.toLowerCase()
+        ? `added ${input.name}`
+        : `added ${input.name} (${category(input.categoryId).label.toLowerCase()})`,
   });
   return asset.id;
 }

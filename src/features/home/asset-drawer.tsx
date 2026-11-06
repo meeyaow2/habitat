@@ -41,24 +41,22 @@ export function AssetDrawer({
   refreshKey: unknown;
 }) {
   const [data, setData] = React.useState<Panel | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<{ id: string; message: string } | null>(null);
   const [dialog, setDialog] = React.useState<null | "task" | "repair">(null);
   const [completing, setCompleting] = React.useState<TaskRow | null>(null);
 
   React.useEffect(() => {
     if (!assetId) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     getAssetPanelAction({ id: assetId })
       .then((res) => {
         if (cancelled) return;
-        if (res.ok) setData(res.data);
-        else setError(res.error);
+        if (res.ok) {
+          setData(res.data);
+          setError(null);
+        } else setError({ id: assetId, message: res.error });
       })
-      .catch(() => !cancelled && setError("We couldn’t load this item. Check your connection and try again."))
-      .finally(() => !cancelled && setLoading(false));
+      .catch(() => !cancelled && setError({ id: assetId, message: "We couldn’t load this item. Check your connection and try again." }));
     return () => {
       cancelled = true;
     };
@@ -96,8 +94,8 @@ export function AssetDrawer({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {error ? (
-              <div className="p-5"><Notice tone="danger">{error}</Notice></div>
+            {error && error.id === assetId ? (
+              <div className="p-5"><Notice tone="danger">{error.message}</Notice></div>
             ) : !current ? (
               <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading item">
                 <Skeleton className="h-4 w-2/3" />

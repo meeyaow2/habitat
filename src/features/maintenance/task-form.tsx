@@ -11,6 +11,7 @@ import { GUIDANCE_DISCLAIMER, guidanceFor, HOUSEHOLD_GUIDANCE } from "@/lib/doma
 import { useAction } from "@/lib/client/use-action";
 import type { AssetOption, MemberOption } from "@/features/shared/options";
 import { createTaskAction, updateTaskAction } from "./actions";
+import { useOnOpen } from "@/lib/client/use-on-change";
 
 export type TaskFormValues = {
   title: string;
@@ -95,10 +96,7 @@ export function TaskFormDialog({
   taskId?: string;
 }) {
   const [v, setV] = React.useState<TaskFormValues>(initial ?? emptyTask());
-  React.useEffect(() => {
-    if (open) setV(initial ?? emptyTask());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useOnOpen(open, () => setV(initial ?? emptyTask()));
   const set = <K extends keyof TaskFormValues>(k: K, val: TaskFormValues[K]) => setV((s) => ({ ...s, [k]: val }));
 
   const create = useAction(createTaskAction, { success: "Task scheduled" });

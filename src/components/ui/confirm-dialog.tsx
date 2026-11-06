@@ -40,6 +40,8 @@ export function ConfirmDialog({ open, onOpenChange, title, description, confirmL
                 try {
                   await onConfirm();
                   onOpenChange(false);
+                } catch {
+                  // Keep the dialog open; the caller shows the error.
                 } finally {
                   setPending(false);
                 }

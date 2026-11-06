@@ -1,6 +1,9 @@
 import "server-only";
 import postgres from "postgres";
 import { env } from "@/lib/env";
+import { pgTypes } from "./types";
+
+export { pgTypes };
 
 export type Sql = postgres.Sql;
 export type Tx = postgres.TransactionSql;
@@ -22,24 +25,7 @@ export function adminSql(): Sql {
       // Required for Supabase's transaction pooler (pgbouncer / supavisor).
       prepare: false,
       onnotice: () => {},
-      types: {
-        // Return `date` columns as plain YYYY-MM-DD strings, never JS Dates,
-        // so calendar dates are never shifted by timezone conversion.
-        date: {
-          to: 1082,
-          from: [1082],
-          serialize: (x: string) => x,
-          parse: (x: string) => x,
-        },
-        // int8 → number. Money columns are capped below 10^12 by constraints,
-        // well inside Number.MAX_SAFE_INTEGER.
-        bigint: {
-          to: 20,
-          from: [20],
-          serialize: (x: number) => String(x),
-          parse: (x: string) => Number(x),
-        },
-      },
+      types: pgTypes,
     });
   }
   return globalThis.__habitatSql;

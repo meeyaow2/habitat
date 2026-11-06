@@ -28,7 +28,10 @@ export function MaintenanceTabs({ view, mine }: { view: string; mine: boolean })
   const params = useSearchParams();
   const set = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params.toString());
-    for (const [k, v] of Object.entries(patch)) v ? next.set(k, v) : next.delete(k);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
     next.delete("task");
     router.replace(`${pathname}?${next}`, { scroll: false });
   };

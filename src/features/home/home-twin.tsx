@@ -24,6 +24,7 @@ import { AddPanel, LayersPanel, PropertiesPanel, ShortcutHelp, UnplacedPanel, ty
 import { docsEqual, historyReducer, initHistory } from "./editor-store";
 import { areaM2, centre, furnitureSpec, newId, objectBounds, placeAtCentre, roomAt, snap, type FloorDoc, type PlanObject } from "./model";
 import { ResetLayoutDialog } from "./reset-dialog";
+import { useOnChange } from "@/lib/client/use-on-change";
 
 const PlanCanvas = dynamic(() => import("./canvas").then((m) => m.PlanCanvas), {
   ssr: false,
@@ -57,8 +58,10 @@ export function HomeTwin(props: TwinProps) {
   const [saved, setSaved] = React.useState({ doc: props.doc, version: floor.version, floorId: props.floorId });
   const [history, dispatch] = React.useReducer(historyReducer, props.doc, initHistory);
   const doc = mode === "edit" ? history.present : saved.doc;
-  const [selection, setSelection] = React.useState<Selection>(null);
-  const [drawerAsset, setDrawerAsset] = React.useState<string | null>(null);
+  // Deep links: ?asset= opens the drawer (view mode) or selects the marker (edit mode).
+  const linked = props.initialAssetId ? props.doc.objects.find((o) => o.assetId === props.initialAssetId) : undefined;
+  const [selection, setSelection] = React.useState<Selection>(() => (props.initialEdit && linked ? { kind: "object", id: linked.id } : null));
+  const [drawerAsset, setDrawerAsset] = React.useState<string | null>(() => (!props.initialEdit && linked ? props.initialAssetId : null));
   const [confirm, setConfirm] = React.useState<null | { action: () => void }>(null);
   const [resetOpen, setResetOpen] = React.useState(false);
   const [announce, setAnnounce] = React.useState("");
@@ -67,17 +70,16 @@ export function HomeTwin(props: TwinProps) {
 
   const dirty = mode === "edit" && !docsEqual(history.present, saved.doc);
 
-  // Server data changed (refresh after save, floor switch, another tab) → adopt it unless editing with unsaved work.
-  React.useEffect(() => {
-    if (props.floorId !== saved.floorId || (!dirty && (props.doc !== saved.doc || floor.version !== saved.version))) {
-      setSaved({ doc: props.doc, version: floor.version, floorId: props.floorId });
-      dispatch({ type: "reset", doc: props.doc });
+  // Server data changed (refresh after save, another tab) → adopt it unless editing with unsaved work.
+  useOnChange(props.doc, (incoming) => {
+    if (!dirty) {
+      setSaved({ doc: incoming, version: floor.version, floorId: props.floorId });
+      dispatch({ type: "reset", doc: incoming });
       setSelection(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.doc, props.floorId, floor.version]);
+  });
 
-  // Canvas height follows the viewport.
+  // Canvas height follows the viewport (an external system; read once on mount, then on resize).
   React.useEffect(() => {
     const update = () => setCanvasHeight(Math.max(380, Math.min(window.innerHeight - (window.innerWidth >= 768 ? 150 : 250), 980)));
     update();
@@ -93,18 +95,6 @@ export function HomeTwin(props: TwinProps) {
     return () => window.removeEventListener("beforeunload", h);
   }, [dirty]);
 
-  // Deep links: ?asset= opens the drawer (view) or selects the marker (edit).
-  React.useEffect(() => {
-    const id = props.initialAssetId;
-    if (!id) return;
-    const obj = props.doc.objects.find((o) => o.assetId === id);
-    if (props.initialEdit) {
-      if (obj) setSelection({ kind: "object", id: obj.id });
-    } else if (obj) {
-      setDrawerAsset(id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const assetById = React.useMemo(() => new Map(props.assets.map((a) => [a.id, a])), [props.assets]);
   const assetName = React.useCallback((id: string) => assetById.get(id)?.name ?? "Item", [assetById]);
@@ -241,7 +231,10 @@ export function HomeTwin(props: TwinProps) {
 
   const setUrl = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params.toString());
-    for (const [k, v] of Object.entries(patch)) v ? next.set(k, v) : next.delete(k);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
     next.delete("welcome");
     window.history.replaceState(null, "", `${pathname}${next.size ? `?${next}` : ""}`);
   };

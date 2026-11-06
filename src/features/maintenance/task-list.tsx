@@ -16,6 +16,7 @@ import type { AssetOption, MemberOption } from "@/features/shared/options";
 import { deleteTaskAction } from "./actions";
 import { CompleteTaskDialog } from "./complete-dialog";
 import { emptyTask, repeatValue, TaskFormDialog } from "./task-form";
+import { useOnChange } from "@/lib/client/use-on-change";
 
 export function TaskList({
   tasks,
@@ -41,7 +42,8 @@ export function TaskList({
   const [deleting, setDeleting] = React.useState<TaskRow | null>(null);
   const del = useAction(deleteTaskAction, { success: "Task deleted" });
 
-  React.useEffect(() => setHidden(new Set()), [tasks]);
+  // New server data supersedes optimistic hiding.
+  useOnChange(tasks, () => setHidden(new Set()));
 
   const visible = tasks.filter((t) => !hidden.has(t.id));
   if (visible.length === 0) return <p className="px-4 py-6 text-sm text-fg-muted sm:px-5">{emptyText}</p>;
