@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PageHeader, Panel, PanelHeader } from "@/components/ui/misc";
-import { authMode, env, storageMode } from "@/lib/env";
+import { authMode, storageMode } from "@/lib/env";
+import { aiConfigured as isAiConfigured } from "@/lib/ai/config";
 import { requireHouseholdContext } from "@/lib/server/context";
 import { AiConsent, DataControls, HouseholdForm, ProfileForm } from "@/features/household/settings-ui";
 
@@ -8,7 +9,7 @@ export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
   const ctx = await requireHouseholdContext();
-  const aiConfigured = env.aiProvider === "anthropic" && !!env.anthropicApiKey;
+  const aiConfigured = isAiConfigured();
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
       <PageHeader title="Settings" />

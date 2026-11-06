@@ -14,6 +14,8 @@ export interface StorageAdapter {
   put(objectPath: string, bytes: Uint8Array, contentType: string): Promise<void>;
   signedUrl(objectPath: string, opts: { expiresIn: number; downloadName?: string; contentType: string }): Promise<string>;
   remove(objectPath: string): Promise<void>;
+  /** Read an object's bytes (server-side only, after an RLS-checked lookup). */
+  get(objectPath: string): Promise<Uint8Array>;
 }
 
 export const BUCKET = "household-documents";
@@ -47,6 +49,10 @@ const local: StorageAdapter = {
     assertSafe(objectPath);
     await rm(path.resolve(env.localStorageDir, objectPath), { force: true });
   },
+  async get(objectPath) {
+    assertSafe(objectPath);
+    return new Uint8Array(await readFile(path.resolve(env.localStorageDir, objectPath)));
+  },
 };
 
 export async function readLocalSigned(token: string) {
@@ -79,6 +85,12 @@ function supabaseAdapter(): StorageAdapter {
       assertSafe(objectPath);
       const { error } = await bucket().remove([objectPath]);
       if (error) throw error;
+    },
+    async get(objectPath) {
+      assertSafe(objectPath);
+      const { data, error } = await bucket().download(objectPath);
+      if (error || !data) throw error ?? new Error("Could not read file");
+      return new Uint8Array(await data.arrayBuffer());
     },
   };
 }

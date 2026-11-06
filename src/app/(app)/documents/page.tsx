@@ -3,7 +3,8 @@ import { Lock } from "lucide-react";
 import { PageHeader } from "@/components/ui/misc";
 import { withUser } from "@/lib/db";
 import { requireHouseholdContext } from "@/lib/server/context";
-import { listAssetOptions } from "@/features/assets/queries";
+import { listAssetOptions, listRooms } from "@/features/assets/queries";
+import { aiConfigured } from "@/lib/ai/config";
 import { DocumentLibrary } from "@/features/documents/documents-ui";
 import { DOC_KINDS, listDocuments } from "@/features/documents/queries";
 
@@ -16,9 +17,10 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Pr
   const ctx = await requireHouseholdContext();
   const uuid = (v?: string) => (v && /^[0-9a-f-]{36}$/i.test(v) ? v : undefined);
   const kind = sp.kind && DOC_KINDS[sp.kind] ? sp.kind : undefined;
-  const { docs, assets } = await withUser(ctx.user.id, async (tx) => ({
+  const { docs, assets, rooms } = await withUser(ctx.user.id, async (tx) => ({
     docs: await listDocuments(tx, ctx.household.id, { q: sp.q?.slice(0, 100), kind, assetId: sp.upload ? undefined : uuid(sp.asset) }),
     assets: await listAssetOptions(tx, ctx.household.id),
+    rooms: await listRooms(tx, ctx.household.id),
   }));
   return (
     <div className="mx-auto max-w-[1240px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -29,6 +31,9 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Pr
       <DocumentLibrary
         docs={docs}
         assets={assets}
+        rooms={rooms}
+        currency={ctx.household.currency}
+        ai={{ configured: aiConfigured(), consented: !!ctx.profile.ai_consent_at }}
         canDeleteAll={ctx.role === "owner"}
         userId={ctx.user.id}
         initialUpload={sp.upload ? (DOC_KINDS[sp.upload] ? sp.upload : "1") : null}

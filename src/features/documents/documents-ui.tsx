@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import * as React from "react";
 import { toast } from "sonner";
-import { Download, FileImage, FileText, Search, Trash2, Upload, UploadCloud } from "lucide-react";
+import { Download, FileImage, FileText, Search, Sparkles, Trash2, Upload, UploadCloud } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -16,7 +16,14 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { formatDate } from "@/lib/domain/dates";
 import { useAction } from "@/lib/client/use-action";
 import { cn } from "@/lib/utils";
-import type { AssetOption } from "@/features/shared/options";
+import type { AssetOption, RoomOption } from "@/features/shared/options";
+import type { NormalisedExtraction } from "@/lib/ai/extraction";
+import { extractDocumentAction } from "@/features/ai/extraction-actions";
+import { ExtractionReviewDialog } from "@/features/ai/extraction-review";
+import { assetToForm, type AssetFormValues } from "@/features/assets/form-values";
+import { getAssetPanelAction } from "@/features/home/actions";
+
+export type AiStatus = { configured: boolean; consented: boolean };
 import { deleteDocumentAction, getDocumentUrlAction, updateDocumentAction } from "./actions";
 import { useOnChange, useOnOpen } from "@/lib/client/use-on-change";
 
@@ -142,7 +149,7 @@ export function UploadDialog({ open, onOpenChange, assets, defaultKind = "receip
   );
 }
 
-export function DocumentLibrary({ docs, assets, canDeleteAll, userId, initialUpload, initialAssetId, initialDoc }: { docs: Doc[]; assets: AssetOption[]; canDeleteAll: boolean; userId: string; initialUpload: string | null; initialAssetId: string | null; initialDoc: string | null }) {
+export function DocumentLibrary({ docs, assets, rooms, currency, ai, canDeleteAll, userId, initialUpload, initialAssetId, initialDoc }: { docs: Doc[]; assets: AssetOption[]; rooms: RoomOption[]; currency: string; ai: AiStatus; canDeleteAll: boolean; userId: string; initialUpload: string | null; initialAssetId: string | null; initialDoc: string | null }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -210,12 +217,36 @@ export function DocumentLibrary({ docs, assets, canDeleteAll, userId, initialUpl
       )}
 
       <UploadDialog open={upload} onOpenChange={(o) => { setUpload(o); if (!o && initialUpload) setParam("upload", null); }} assets={assets} defaultKind={initialUpload && initialUpload !== "1" ? initialUpload : "receipt"} defaultAssetId={initialAssetId ?? ""} />
-      <DocumentViewer doc={doc} assets={assets} canDelete={!!doc && (canDeleteAll || doc.uploaded_by === userId)} onClose={() => { setViewing(null); if (initialDoc) setParam("doc", null); }} />
+      <DocumentViewer doc={doc} assets={assets} rooms={rooms} currency={currency} ai={ai} canDelete={!!doc && (canDeleteAll || doc.uploaded_by === userId)} onClose={() => { setViewing(null); if (initialDoc) setParam("doc", null); }} />
     </>
   );
 }
 
-function DocumentViewer({ doc, assets, canDelete, onClose }: { doc: Doc | null; assets: AssetOption[]; canDelete: boolean; onClose: () => void }) {
+function DocumentViewer({ doc, assets, rooms, currency, ai, canDelete, onClose }: { doc: Doc | null; assets: AssetOption[]; rooms: RoomOption[]; currency: string; ai: AiStatus; canDelete: boolean; onClose: () => void }) {
+  const [reading, setReading] = React.useState(false);
+  const [aiError, setAiError] = React.useState<string | null>(null);
+  const [review, setReview] = React.useState<null | { extractionId: string; result: NormalisedExtraction; linked: { id: string; name: string; form: AssetFormValues } | null }>(null);
+  const aiSupported = !!doc && ["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(doc.mime_type);
+
+  async function readWithAi() {
+    if (!doc) return;
+    setReading(true);
+    setAiError(null);
+    try {
+      const r = await extractDocumentAction(doc.id);
+      if (!r.ok) return setAiError(r.error);
+      let linked = null;
+      if (doc.asset_id) {
+        const p = await getAssetPanelAction({ id: doc.asset_id });
+        if (p.ok) linked = { id: p.data.asset.id, name: p.data.asset.name, form: assetToForm(p.data.asset, p.data.warranties[0] ?? null) };
+      }
+      setReview({ extractionId: r.data.id, result: r.data.fields as NormalisedExtraction, linked });
+    } catch {
+      setAiError("We couldn’t reach Habitat. Check your connection and try again.");
+    } finally {
+      setReading(false);
+    }
+  }
   const [url, setUrl] = React.useState<string | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
   const [confirm, setConfirm] = React.useState(false);
@@ -264,6 +295,29 @@ function DocumentViewer({ doc, assets, canDelete, onClose }: { doc: Doc | null; 
               <img src={url} alt={doc.title} className="max-h-[52vh] w-full object-contain" />
             )}
           </div>
+          {aiSupported && (
+            <div className="border-b border-line px-5 py-4">
+              {ai.configured && ai.consented ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-fg-muted">Fill in product, price and warranty details from this document.</p>
+                    <Button variant="soft" onClick={readWithAi} loading={reading}><Sparkles aria-hidden /> Read with AI</Button>
+                  </div>
+                  {reading && <p className="text-xs text-fg-muted" role="status">Reading the document — this can take up to a minute.</p>}
+                  {aiError && <Notice tone="warning">{aiError}</Notice>}
+                </div>
+              ) : (
+                <p className="flex items-start gap-2 text-sm text-fg-muted">
+                  <Sparkles className="mt-0.5 size-4 shrink-0" aria-hidden />
+                  {ai.configured ? (
+                    <span>AI can read receipts and warranty cards for you. <Link href="/settings" className="font-medium text-accent hover:underline">Turn on AI features</Link> to allow this document to be sent to the AI provider.</span>
+                  ) : (
+                    <span>AI reading isn’t set up on this server, so enter details yourself. (Administrators: see README → AI features.)</span>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
           <form
             className="grid gap-4 p-5 sm:grid-cols-2"
             noValidate
@@ -299,6 +353,9 @@ function DocumentViewer({ doc, assets, canDelete, onClose }: { doc: Doc | null; 
               {canDelete && <Button type="button" variant="danger-ghost" className="ml-auto" onClick={() => setConfirm(true)}><Trash2 aria-hidden /> Delete</Button>}
             </div>
           </form>
+          {review && (
+            <ExtractionReviewDialog open={!!review} onOpenChange={(o) => !o && setReview(null)} extractionId={review.extractionId} result={review.result} rooms={rooms} linkedAsset={review.linked} currency={currency} />
+          )}
           <ConfirmDialog open={confirm} onOpenChange={setConfirm} title={`Delete “${doc.title}”?`} description="The file is permanently removed from storage. Linked items and warranties stay, without this document." confirmLabel="Delete document" onConfirm={async () => { const ok = await del.run({ id: doc.id }); if (ok) onClose(); }} />
         </SheetContent>
       )}
