@@ -4,7 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as React from "react";
 import { Dialog as D } from "radix-ui";
-import { Check, ChevronsUpDown, FlaskConical, LogOut, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, X } from "lucide-react";
+import { Check, ChevronsUpDown, FlaskConical, LogOut, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Sparkles, X } from "lucide-react";
+import { AskHabitat } from "@/features/ai/ask-habitat";
+import { NotificationBell } from "@/features/notifications/bell";
+import type { NotificationRow } from "@/features/notifications/server";
 import { BrandMark } from "@/components/brand";
 import { Avatar } from "@/components/ui/misc";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
@@ -20,13 +23,16 @@ export type ShellProps = {
   household: { id: string; name: string };
   memberships: { id: string; name: string; role: string }[];
   initialCollapsed: boolean;
+  notifications: { items: NotificationRow[]; unread: number };
+  ai: { configured: boolean; consented: boolean };
   children: React.ReactNode;
 };
 
-export function AppShell({ user, household, memberships, initialCollapsed, children }: ShellProps) {
+export function AppShell({ user, household, memberships, initialCollapsed, notifications, ai, children }: ShellProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(initialCollapsed);
   const [moreOpen, setMoreOpen] = React.useState(false);
+  const [askOpen, setAskOpen] = React.useState(false);
 
   const toggle = React.useCallback(() => {
     setCollapsed((c) => {
@@ -40,6 +46,10 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
         e.preventDefault();
         toggle();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setAskOpen((o) => !o);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -96,9 +106,24 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
                 </React.Fragment>
               );
             })}
+            <div className="my-2 h-px bg-line" aria-hidden />
+            <Tooltip content="Ask Habitat" shortcut="Ctrl J" side="right">
+              <button
+                type="button"
+                onClick={() => setAskOpen(true)}
+                aria-keyshortcuts="Control+J"
+                className="group flex h-9 items-center gap-3 rounded-md px-2.5 text-sm font-medium text-fg-muted hover:bg-surface-muted hover:text-fg"
+              >
+                <Sparkles className="size-[18px] shrink-0 text-accent" aria-hidden />
+                <span className={cn("truncate", collapsed ? "sr-only" : "sr-only lg:not-sr-only")}>Ask Habitat</span>
+              </button>
+            </Tooltip>
           </nav>
           <div className="flex flex-col gap-1 border-t border-line p-2">
-            <UserMenu user={user} collapsed={collapsed} />
+            <div className={cn("flex items-center gap-1", collapsed ? "flex-col-reverse" : "flex-col-reverse lg:flex-row")}>
+              <div className="min-w-0 flex-1 self-stretch"><UserMenu user={user} collapsed={collapsed} /></div>
+              <NotificationBell items={notifications.items} unread={notifications.unread} />
+            </div>
             <button
               type="button"
               onClick={toggle}
@@ -120,7 +145,13 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
           {/* Mobile top bar */}
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-line bg-canvas/95 px-4 backdrop-blur md:hidden">
             <HouseholdSwitcher household={household} memberships={memberships} collapsed={false} compact />
-            <UserMenu user={user} collapsed compact />
+            <div className="flex items-center gap-0.5">
+              <button type="button" onClick={() => setAskOpen(true)} className="grid size-9 place-items-center rounded-md text-accent hover:bg-surface-muted" aria-label="Ask Habitat">
+                <Sparkles className="size-[18px]" aria-hidden />
+              </button>
+              <NotificationBell items={notifications.items} unread={notifications.unread} />
+              <UserMenu user={user} collapsed compact />
+            </div>
           </header>
 
           <main id="main" className="min-w-0 flex-1 pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0">
@@ -128,6 +159,8 @@ export function AppShell({ user, household, memberships, initialCollapsed, child
           </main>
         </div>
       </div>
+
+      <AskHabitat open={askOpen} onOpenChange={setAskOpen} configured={ai.configured} consented={ai.consented} />
 
       {/* Mobile bottom tabs */}
       <nav

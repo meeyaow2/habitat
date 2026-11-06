@@ -22,7 +22,9 @@ Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` d
 | Settings: profile, reminder window, AI consent, JSON data export, account deletion | ✅ |
 | Demo mode (isolated, anonymous, auto-expiring sample household) | ✅ |
 | 3D preview generated from the 2D plan | ✅ (basic) |
-| AI receipt extraction & Ask Habitat assistant | ❌ Not built yet — see roadmap |
+| AI receipt reading: consent-gated, field-level status (extracted / inferred / missing / uncertain) with evidence quotes, review before saving | ✅ (provider stubbed in tests — see below) |
+| Ask Habitat: answers from RLS-scoped records with links, exact SQL totals, suggested tasks need confirmation | ✅ (provider stubbed in tests — see below) |
+| Notifications: overdue tasks and expiring warranties, bell inbox linking to the record | ✅ |
 
 See [docs/STATUS.md](docs/STATUS.md) for verified behaviour and known limitations, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
 
@@ -54,6 +56,16 @@ docker run -d --name habitat-pg -e POSTGRES_PASSWORD=postgres -p 54322:5432 post
 4. The storage migration creates a private `household-documents` bucket with member-only policies.
 
 > The Supabase adapters are implemented but were **not exercised against a live Supabase project** in development (the build environment could not reach Supabase). The local mode, which shares the same migrations and RLS, is fully tested.
+
+## AI features (optional)
+
+Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (server-only); `AI_MODEL` defaults to `claude-opus-5-5`. Each person must then opt in under **Settings → AI features** before anything is sent.
+
+- **Read with AI** (Documents → open a PDF/JPG/PNG/WebP): returns each field with a status and the verbatim text it came from. The server rejects values without evidence, invalid dates and prices, and calculates warranty expiry itself. Nothing is saved until the person reviews the form.
+- **Ask Habitat** (sidebar, or Ctrl/⌘ J): read-only tools over the household's records, run under RLS for the signed-in person. Totals come from SQL. Links are only attached for records the tools returned. Suggested tasks are created only when the person confirms. Document contents are never sent; conversations aren't stored, and the tool loop runs without server-side message threads.
+- Refusals are handled, and server-side refusal fallbacks are enabled.
+
+> These were tested with a stubbed provider (DB integration tests) and against the real API with an invalid key (error path). **No live model calls were made during development**, so prompt quality has not been evaluated against real documents yet.
 
 ## Scripts
 

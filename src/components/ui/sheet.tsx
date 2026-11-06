@@ -16,7 +16,7 @@ export function SheetContent({
   headerExtra,
   modal = true,
   ...props
-}: React.ComponentProps<typeof D.Content> & {
+}: Omit<React.ComponentProps<typeof D.Content>, "title"> & {
   title: React.ReactNode;
   description?: React.ReactNode;
   headerExtra?: React.ReactNode;

@@ -59,6 +59,8 @@ test.describe.serial("demo mode, responsive layout and accessibility", () => {
 
   test("primary pages have no serious or critical axe violations", async () => {
     const page = await ctx.newPage();
+    // Reduced motion: no entrance animations mid-measurement (and exercises that path).
+    await page.emulateMedia({ reducedMotion: "reduce" });
     for (const p of [...PAGES, "/home?edit=1"]) {
       await page.goto(p);
       await page.waitForLoadState("networkidle");
@@ -70,6 +72,7 @@ test.describe.serial("demo mode, responsive layout and accessibility", () => {
   });
 
   test("public pages are accessible too", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
     for (const p of ["/", "/sign-in", "/sign-up"]) {
       await page.goto(p);
       const results = await new AxeBuilder({ page: page as unknown as AxePage }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
