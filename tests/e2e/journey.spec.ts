@@ -22,7 +22,8 @@ test("a new household sets up their home end to end", async ({ page }) => {
 
   // 2. Choose a template
   await expect(page.getByText("Starter layouts are illustrative")).toBeVisible();
-  await expect(page.getByRole("radio", { name: /HDB 4-room/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /Draw it yourself/ })).toBeChecked();
+  await page.getByText("HDB 4-room", { exact: true }).click();
   await page.getByRole("button", { name: "Use this layout" }).click();
 
   // 3. Add a washing machine
@@ -46,12 +47,13 @@ test("a new household sets up their home end to end", async ({ page }) => {
 
   // 5. Place it on the floor plan and save
   await page.goto("/home?edit=1");
+  await page.getByRole("radio", { name: "Add" }).click();
   await expect(page.getByText("Not on the plan · 1")).toBeVisible();
   await page.getByRole("button", { name: "Place Washing machine on the plan" }).click();
   await expect(page.getByText("Not on the plan · 0")).toBeVisible();
   await expect(page.getByText("Unsaved changes")).toBeVisible();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Floor plan saved")).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Drawing saved")).toBeVisible();
 
   // 6. Refresh: the position persists (view mode lists it inside its room)
   await page.goto("/home");

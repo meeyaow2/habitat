@@ -112,7 +112,7 @@ export function LayersPanel({ doc, selection, onSelect, assetName }: { doc: Floo
   );
 }
 
-function CommitInput({ value, onCommit, label, id, type = "text", step, min, suffix }: { value: string; onCommit: (v: string) => void; label: string; id: string; type?: string; step?: string; min?: string; suffix?: string }) {
+export function CommitInput({ value, onCommit, label, id, type = "text", step, min, suffix }: { value: string; onCommit: (v: string) => void; label: string; id: string; type?: string; step?: string; min?: string; suffix?: string }) {
   const [draft, setDraft] = React.useState(value);
   useOnChange(value, (v) => setDraft(v));
   return (

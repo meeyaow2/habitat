@@ -63,14 +63,16 @@ export function OnboardingFlow({
   const [home, setHome] = React.useState({ ...defaults, hdbFlatType: defaults.hdbFlatType ?? "4_room" });
   const createHome = useAction(createHomeAction, { silent: true });
   // Step 3
-  const [template, setTemplate] = React.useState<TemplateKey>(suggestedTemplate(defaults.propertyType, defaults.hdbFlatType));
+  const [template, setTemplate] = React.useState<TemplateKey>("blank");
   const applyLayout = useAction(applyLayoutAction, { silent: true });
   // Step 4
   const [asset, setAsset] = React.useState<AssetFormValues>(emptyAsset({ categoryId: "washing_machine", name: "Washing machine" }));
   const addAsset = useAction(addFirstApplianceAction, { silent: true });
 
   const options = templatesFor(home.propertyType);
-  const ordered = [...options.filter((t) => t.key !== "blank"), ...TEMPLATES.filter((t) => t.key === "blank")];
+  // Drawing your own plan comes first; templates are optional head starts.
+  const ordered = [...TEMPLATES.filter((t) => t.key === "blank"), ...options.filter((t) => t.key !== "blank")];
+  void suggestedTemplate;
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -137,7 +139,6 @@ export function OnboardingFlow({
                   hdbFlatType: home.propertyType === "hdb" ? home.hdbFlatType : null,
                 });
                 if (ok) {
-                  setTemplate(suggestedTemplate(home.propertyType, home.hdbFlatType));
                   setStep("layout");
                   router.refresh();
                 }
@@ -207,8 +208,8 @@ export function OnboardingFlow({
                 }
               }}
             >
-              <h1 ref={headingRef} tabIndex={-1} className="text-3xl font-semibold tracking-tight focus:outline-none">Choose a starting layout</h1>
-              <p className="mt-2 text-fg-muted">Pick the closest match — you can move, resize and rename every room afterwards.</p>
+              <h1 ref={headingRef} tabIndex={-1} className="text-3xl font-semibold tracking-tight focus:outline-none">How do you want to start?</h1>
+              <p className="mt-2 text-fg-muted">Draw your home yourself, like a CAD program — or start from a layout and edit every wall.</p>
               <Notice tone="neutral" icon={<Info />} className="mt-4">
                 Starter layouts are illustrative arrangements, not official floor plans, and their sizes are approximate.
               </Notice>
@@ -240,7 +241,7 @@ export function OnboardingFlow({
                   );
                 })}
               </div>
-              <StepNav onBack={() => go("home")} submitLabel="Use this layout" pending={applyLayout.pending} />
+              <StepNav onBack={() => go("home")} submitLabel={template === "blank" ? "Start with a blank canvas" : "Use this layout"} pending={applyLayout.pending} />
             </form>
           )}
 
@@ -271,7 +272,7 @@ export function OnboardingFlow({
             <section>
               <h1 ref={headingRef} tabIndex={-1} className="text-3xl font-semibold tracking-tight focus:outline-none">Your home is ready</h1>
               <p className="mt-3 max-w-xl text-lg text-fg-muted">
-                Next, open your floor plan and drag your appliance to where it lives. Its room updates automatically.
+                Next, open your home in Edit mode: draw walls (press W, click, type a length, Enter), add doors and windows, then drag your appliance to where it lives.
               </p>
               <form action={finishOnboardingAction} className="mt-10">
                 <Button type="submit" variant="primary" size="lg">

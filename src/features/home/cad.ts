@@ -519,3 +519,39 @@ export function toDxf(input: DxfInput): string {
   g(0, "ENDSEC"); g(0, "EOF");
   return out.join("\r\n") + "\r\n";
 }
+
+/** Split a wall at a point on it (T-junctions); openings go to whichever piece contains them. */
+export function splitWallAt(g: Geometry, wallId: string, p: Pt, newId: () => string): Geometry {
+  const w = g.walls.find((x) => x.id === wallId);
+  if (!w) return g;
+  const pr = projectOnSegment(p, w.a, w.b);
+  const at = roundPt(pr.point);
+  const L = wallLength(w);
+  const cut = pr.t * L;
+  if (cut < 5 || L - cut < 5) return g; // too close to an end: it's already a corner
+  const w1: Wall = { ...w, b: at };
+  const w2: Wall = { ...w, id: newId(), a: at };
+  const openings = g.openings.map((o) => (o.wallId !== w.id || o.offset <= cut ? o : { ...o, wallId: w2.id, offset: o.offset - cut }));
+  const walls = g.walls.flatMap((x) => (x.id === w.id ? [w1, w2] : [x]));
+  return { ...g, walls, openings: reclampOpenings(walls, openings) };
+}
+
+/** Move a whole wall; walls joined at its ends stretch to follow. */
+export function moveWall(g: Geometry, wallId: string, dx: number, dy: number): Geometry {
+  const w = g.walls.find((x) => x.id === wallId);
+  if (!w) return g;
+  const d = { x: dx, y: dy };
+  let next = g;
+  // Move the far end first, then the near end, so shared corners resolve correctly.
+  next = moveCorner(next, w.b, add(w.b, d));
+  const moved = next.walls.find((x) => x.id === wallId)!;
+  next = moveCorner(next, moved.a, add(w.a, d));
+  return next;
+}
+
+/** Change a wall's length by moving its `b` end along its direction (joined walls follow). */
+export function setWallLength(g: Geometry, wallId: string, length: number): Geometry {
+  const w = g.walls.find((x) => x.id === wallId);
+  if (!w || length < 1) return g;
+  return moveCorner(g, w.b, add(w.a, mul(wallDir(w), length)));
+}

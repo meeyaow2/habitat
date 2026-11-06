@@ -118,3 +118,43 @@ export const getAssetPanelAction = householdAction(z.object({ id }), async ({ in
     currency: ctx.household.currency,
   };
 }, "asset.panel");
+
+// ---------------------------------------------------------------------------
+// Levels
+// ---------------------------------------------------------------------------
+export const addLevelAction = householdAction(z.object({ name: z.string().trim().min(1).max(40) }), async ({ input, tx, ctx }) => {
+  assertOwner(ctx);
+  const property = await getPrimaryProperty(tx, ctx.household.id);
+  if (!property) throw new UserFacingError("Set up your home first.");
+  const [last] = await tx<{ level: number; width_cm: number; depth_cm: number; wall_height_cm: number }[]>`
+    select level, width_cm, depth_cm, wall_height_cm from floors where property_id = ${property.id} order by level desc limit 1`;
+  const [f] = await tx<{ id: string }[]>`
+    insert into floors (household_id, property_id, name, level, width_cm, depth_cm, wall_height_cm)
+    values (${ctx.household.id}, ${property.id}, ${input.name}, ${(last?.level ?? 0) + 1}, ${last?.width_cm ?? 1600}, ${last?.depth_cm ?? 1200}, ${last?.wall_height_cm ?? 260})
+    returning id`;
+  await logActivity(tx, { householdId: ctx.household.id, actorId: ctx.user.id, action: "level.added", entityType: "floor", entityId: f.id, summary: `added a level: ${input.name}` });
+  refresh();
+  return { id: f.id };
+}, "level.add");
+
+export const updateLevelAction = householdAction(
+  z.object({ floorId: id, name: z.string().trim().min(1).max(40), wallHeight: z.number().int().min(200).max(600) }),
+  async ({ input, tx, ctx }) => {
+    const res = await tx`update floors set name = ${input.name}, wall_height_cm = ${input.wallHeight} where id = ${input.floorId} and household_id = ${ctx.household.id}`;
+    if (res.count === 0) throw new UserFacingError("This level no longer exists.");
+    refresh();
+  },
+  "level.update",
+);
+
+export const deleteLevelAction = householdAction(z.object({ floorId: id }), async ({ input, tx, ctx }) => {
+  assertOwner(ctx);
+  const [f] = await tx<{ property_id: string; name: string }[]>`select property_id, name from floors where id = ${input.floorId} and household_id = ${ctx.household.id}`;
+  if (!f) throw new UserFacingError("This level no longer exists.");
+  const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from floors where property_id = ${f.property_id}`;
+  if (n <= 1) throw new UserFacingError("A home needs at least one level.");
+  // Rooms, drawing and furniture on this level are removed; appliances stay in your records, unplaced.
+  await tx`delete from floors where id = ${input.floorId}`;
+  await logActivity(tx, { householdId: ctx.household.id, actorId: ctx.user.id, action: "level.deleted", entityType: "floor", entityId: null, summary: `deleted the level “${f.name}”` });
+  refresh();
+}, "level.delete");

@@ -2,74 +2,115 @@
 
 import Konva from "konva";
 import * as React from "react";
-import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text, Transformer } from "react-konva";
+import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text } from "react-konva";
 import { category } from "@/lib/domain/categories";
 import {
-  alignRect,
-  areaM2,
-  docBounds,
-  GRID_CM,
-  MIN_OBJECT_CM,
-  MIN_ROOM_CM,
-  objectBounds,
-  snap,
-  type FloorDoc,
-  type Guide,
-  type PlanObject,
-  type Rect as R,
-  type RoomShape,
-} from "./model";
+  add, angleDeg, clampOpening, DEFAULTS, dist, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
+  openingSpan, perp, pointAtLength, polygonArea, polygonCentroid, roundPt, samePt, snapPoint, splitWallAt,
+  sub, unit, wallDir, wallLength, wallSegments,
+  type Geometry, type Opening, type OpeningKind, type Pt, type SnapResult, type Wall,
+} from "./cad";
+import { docBounds, newId, objectBounds, roomPolygon, withPolygon, moveRoom, type FloorDoc, type PlanObject, type Rect as R } from "./model";
 import { FURNITURE_FILL, FURNITURE_STROKE, PLAN, ROOM_FILL, ROOM_FILL_SELECTED } from "./palette";
 import { iconImage } from "./icon-images";
 
 Konva.dragDistance = 4;
 Konva.hitOnDragEnabled = true;
 
-export type Selection = { kind: "room" | "object"; id: string } | null;
+export type Tool = "select" | "pan" | "wall" | "room" | "door" | "window" | "opening" | "dimension" | "text" | "measure";
+export type SelectionKind = "room" | "object" | "wall" | "opening" | "dimension" | "label";
+export type Selection = { kind: SelectionKind; id: string } | null;
 export type MarkerTone = "neutral" | "warning" | "danger";
 export type MarkerInfo = { name: string; categoryId: string; tone: MarkerTone; reason: string | null };
+export type LayerKey = "walls" | "openings" | "rooms" | "furniture" | "appliances" | "dimensions" | "labels" | "grid";
+export type Layers = Record<LayerKey, boolean>;
+export type DraftSettings = { wallThickness: number; snap: boolean; ortho: boolean; grid: boolean; layers: Layers };
 
 export type CanvasHandle = {
   fit: () => void;
   zoomBy: (factor: number) => void;
-  viewCentre: () => { x: number; y: number };
+  viewCentre: () => Pt;
   focusRect: (r: R) => void;
+  /** Typed length while drawing walls/rooms/dimensions/measuring: place the next point. */
+  applyLength: (cm: number) => boolean;
+  finish: () => void;
+  cancel: () => void;
+  undoPoint: () => void;
+  exportPng: () => string | null;
+  isDrafting: () => boolean;
 };
 
 type Props = {
   doc: FloorDoc;
   editable: boolean;
+  tool: Tool;
+  settings: DraftSettings;
   extent: { width: number; height: number };
   selection: Selection;
   onSelect: (s: Selection) => void;
   onCommit: (doc: FloorDoc) => void;
   markers: Record<string, MarkerInfo>;
   onOpenAsset: (assetId: string) => void;
-  onDropAsset: (assetId: string, p: { x: number; y: number }) => void;
+  onDropAsset: (assetId: string, p: Pt) => void;
+  onCursor: (p: Pt | null, snap: SnapResult["kind"] | null) => void;
+  onPrompt: (text: string) => void;
+  onRequestText: (at: Pt) => void;
+  onMeasure: (cm: number | null) => void;
   illustrative: boolean;
   height: number;
   ariaLabel: string;
   onKeyDown?: (e: React.KeyboardEvent) => void;
 };
 
-const MIN_SCALE = 0.08;
-const MAX_SCALE = 5;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 8;
 const clampScale = (s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+const FONT = "Instrument Sans, system-ui, sans-serif";
+
+const PROMPTS: Record<Tool, [string, string?]> = {
+  select: ["Select an object to edit it · drag empty space to pan · W wall · R room · D door · N window · M dimension · T text"],
+  pan: ["Drag to pan · scroll or pinch to zoom"],
+  wall: ["WALL  Specify start point", "WALL  Specify next point or type a length, then Enter · Enter/Esc to finish · Backspace removes the last wall"],
+  room: ["ROOM  Click the first corner", "ROOM  Click the next corner or type a length · click the first point or press Enter to close"],
+  door: ["DOOR  Click a wall to place a door"],
+  window: ["WINDOW  Click a wall to place a window"],
+  opening: ["OPENING  Click a wall to place an opening"],
+  dimension: ["DIMENSION  Specify the first point", "DIMENSION  Specify the second point or type a length"],
+  text: ["TEXT  Click where the text should go"],
+  measure: ["MEASURE  Specify the first point", "MEASURE  Specify the second point"],
+};
 
 export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCanvas(props, ref) {
-  const { doc, editable, extent, selection, onSelect, onCommit, markers, onOpenAsset, onDropAsset, illustrative, height } = props;
+  const { doc, editable, tool, settings, extent, selection, onSelect, onCommit, markers, onOpenAsset, onDropAsset, illustrative, height } = props;
+  const g = doc.geometry;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const stageRef = React.useRef<Konva.Stage>(null);
-  const trRef = React.useRef<Konva.Transformer>(null);
   const [width, setWidth] = React.useState(0);
   const [view, setView] = React.useState({ scale: 0.6, x: 40, y: 40 });
-  const [guides, setGuides] = React.useState<Guide[]>([]);
+  const [cursor, setCursor] = React.useState<SnapResult | null>(null);
+  // The in-progress shape is tagged with the tool that started it, so switching tools
+  // never needs a reset (a reset could race with the next click).
+  const [draftState, setDraftState] = React.useState<{ tool: Tool; pts: Pt[] }>({ tool: "select", pts: [] });
+  const draft = draftState.tool === tool ? draftState.pts : [];
+  const setDraft = (pts: Pt[] | ((prev: Pt[]) => Pt[])) =>
+    setDraftState((prev) => ({ tool, pts: typeof pts === "function" ? pts(prev.tool === tool ? prev.pts : []) : pts }));
+  /** Dimension tool: after two points, the next click sets the offset. */
+  const dimOffsetStage = tool === "dimension" && draft.length === 2;
   const [hovered, setHovered] = React.useState<string | null>(null);
+  const [preview, setPreview] = React.useState<Geometry | null>(null);
+  const [roomPreview, setRoomPreview] = React.useState<{ id: string; pts: Pt[] } | null>(null);
+  const [spaceDown, setSpaceDown] = React.useState(false);
   const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
   const fitted = React.useRef(false);
-  const pinch = React.useRef<{ dist: number; centre: { x: number; y: number } } | null>(null);
+  const pinch = React.useRef<{ dist: number; centre: Pt } | null>(null);
 
-  // Track container width.
+  const drawing = editable && tool !== "select" && tool !== "pan";
+  const geo = preview ?? g;
+  const L = settings.layers;
+  const s = view.scale;
+  const px = (n: number) => n / s;
+
+  // ---------------------------------------------------------------- sizing & view
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -81,19 +122,26 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const fitTo = React.useCallback(
     (r: R | null, maxScale = 1.4) => {
       if (!width) return;
-      const target = r ?? { x: 0, y: 0, width: extent.width, height: extent.height };
-      const pad = width < 500 ? 24 : 56;
+      const target = r && r.width > 0 && r.height > 0 ? r : { x: 0, y: 0, width: extent.width, height: extent.height };
+      const pad = width < 500 ? 28 : 64;
       const scale = clampScale(Math.min((width - pad * 2) / target.width, (height - pad * 2) / target.height, maxScale));
-      setView({
-        scale,
-        x: (width - target.width * scale) / 2 - target.x * scale,
-        y: (height - target.height * scale) / 2 - target.y * scale,
-      });
+      setView({ scale, x: (width - target.width * scale) / 2 - target.x * scale, y: (height - target.height * scale) / 2 - target.y * scale });
     },
     [width, height, extent.width, extent.height],
   );
 
-  const fit = React.useCallback(() => fitTo(docBounds(doc)), [fitTo, doc]);
+  const allBounds = React.useCallback(() => {
+    const pts = [...g.walls.flatMap((w) => [w.a, w.b])];
+    const b = docBounds(doc);
+    if (pts.length === 0) return b;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const wb = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    if (!b) return wb;
+    const x = Math.min(b.x, wb.x), y = Math.min(b.y, wb.y);
+    return { x, y, width: Math.max(b.x + b.width, wb.x + wb.width) - x, height: Math.max(b.y + b.height, wb.y + wb.height) - y };
+  }, [doc, g.walls]);
+
+  const fit = React.useCallback(() => fitTo(allBounds()), [fitTo, allBounds]);
 
   React.useEffect(() => {
     if (width && !fitted.current) {
@@ -102,7 +150,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     }
   }, [width, fit]);
 
-  const zoomAround = React.useCallback((factor: number, point?: { x: number; y: number }) => {
+  const zoomAround = React.useCallback((factor: number, point?: Pt) => {
     setView((v) => {
       const p = point ?? { x: width / 2, y: height / 2 };
       const scale = clampScale(v.scale * factor);
@@ -111,140 +159,574 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     });
   }, [width, height]);
 
+  // ---------------------------------------------------------------- prompts
+  React.useEffect(() => {
+    const [first, next] = PROMPTS[editable ? tool : "select"];
+    props.onPrompt(draft.length > 0 && next ? next : editable ? first : "View mode — select an item to see its details · switch to Edit to draw");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, draft.length, editable]);
+
+  React.useEffect(() => {
+    const down = (e: KeyboardEvent) => e.code === "Space" && !(e.target as HTMLElement).closest("input,textarea") && setSpaceDown(true);
+    const up = (e: KeyboardEvent) => e.code === "Space" && setSpaceDown(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
+
+  // Changing tool abandons any half-drawn shape.
+
+  // ---------------------------------------------------------------- snapping
+  const snapCtx = React.useCallback(
+    (from: Pt | null, exclude?: (w: Wall) => boolean) => ({
+      walls: exclude ? geo.walls.filter((w) => !exclude(w)) : geo.walls,
+      points: doc.rooms.flatMap((r) => roomPolygon(r)),
+      grid: settings.grid ? 10 : 0,
+      tolerance: px(12),
+      from,
+      ortho: settings.ortho,
+      enabled: settings.snap ? undefined : { endpoint: false, midpoint: false, onWall: false, tracking: false },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [geo.walls, doc.rooms, settings.grid, settings.snap, settings.ortho, s],
+  );
+
+  const worldPointer = (evt?: Event): Pt | null => {
+    const stage = stageRef.current;
+    // Read the position from the event itself when available: a fast first click can
+    // arrive before Konva has recorded any pointer position.
+    if (stage && evt) stage.setPointersPositions(evt);
+    const p = stage?.getPointerPosition();
+    if (!p) return null;
+    return { x: (p.x - view.x) / view.scale, y: (p.y - view.y) / view.scale };
+  };
+
+  // ---------------------------------------------------------------- committing helpers
+  const commitGeometry = (next: Geometry) => onCommit({ ...doc, geometry: next });
+
+  const addWall = (a: Pt, b: Pt, snapB: SnapResult | null, snapA: SnapResult | null) => {
+    if (dist(a, b) < 1) return;
+    let next = g;
+    // Join into existing walls at T-junctions.
+    if (snapA?.kind === "on-wall" && snapA.wallId) next = splitWallAt(next, snapA.wallId, a, newId);
+    if (snapB?.kind === "on-wall" && snapB.wallId) next = splitWallAt(next, snapB.wallId, b, newId);
+    const wall: Wall = { id: newId(), a: roundPt(a), b: roundPt(b), thickness: settings.wallThickness };
+    commitGeometry({ ...next, walls: [...next.walls, wall] });
+  };
+
+  const placeOpening = (kind: OpeningKind, p: Pt) => {
+    const hit = nearestWall(g.walls, p, px(24) + 20);
+    if (!hit) return false;
+    const d = DEFAULTS[kind];
+    const o: Opening = { id: newId(), wallId: hit.wall.id, kind, offset: hit.offset, width: d.width, flip: false, hingeEnd: false, height: d.height, sill: d.sill };
+    const c = clampOpening(hit.wall, o);
+    commitGeometry({ ...g, openings: [...g.openings, { ...o, ...c }] });
+    onSelect({ kind: "opening", id: o.id });
+    return true;
+  };
+
+  const closeRoom = (pts: Pt[]) => {
+    if (pts.length < 3 || polygonArea(pts) < 2500) return;
+    const room = withPolygon(
+      { id: newId(), name: `Room ${doc.rooms.length + 1}`, roomType: "other" as const, x: 0, y: 0, width: 0, height: 0, sortOrder: doc.rooms.length },
+      pts.map(roundPt),
+    );
+    onCommit({ ...doc, rooms: [...doc.rooms, room] });
+    onSelect({ kind: "room", id: room.id });
+  };
+
+  const placePoint = (p: Pt, snap: SnapResult | null) => {
+    if (tool === "wall") {
+      if (draft.length === 0) return setDraft([p]);
+      const last = draft[draft.length - 1];
+      addWall(last, p, snap, null);
+      if (draft.length > 1 && samePt(p, draft[0], 1)) return setDraft([]); // closed a loop
+      setDraft([...draft, p]);
+    } else if (tool === "room") {
+      if (draft.length >= 3 && samePt(p, draft[0], px(10))) {
+        closeRoom(draft);
+        return setDraft([]);
+      }
+      setDraft([...draft, p]);
+    } else if (tool === "dimension") {
+      if (draft.length === 0) return setDraft([p]);
+      if (draft.length === 1) {
+        if (dist(draft[0], p) < 1) return;
+        return setDraft([draft[0], p]);
+      }
+    } else if (tool === "measure") {
+      if (draft.length === 0) {
+        props.onMeasure(null);
+        return setDraft([p]);
+      }
+      props.onMeasure(dist(draft[0], p));
+      setDraft([]);
+    }
+  };
+
   React.useImperativeHandle(ref, () => ({
     fit,
     zoomBy: (f) => zoomAround(f),
     viewCentre: () => ({ x: (width / 2 - view.x) / view.scale, y: (height / 2 - view.y) / view.scale }),
     focusRect: (r) => fitTo({ x: r.x - 150, y: r.y - 150, width: r.width + 300, height: r.height + 300 }, 1.6),
-  }), [fit, zoomAround, width, height, view, fitTo]);
+    applyLength: (cm) => {
+      if (!draft.length || !["wall", "room", "dimension", "measure"].includes(tool)) return false;
+      const from = draft[draft.length - 1];
+      const toward = cursor?.point && dist(cursor.point, from) > 0.5 ? cursor.point : add(from, { x: 1, y: 0 });
+      const p = pointAtLength(from, toward, cm);
+      placePoint(p, null);
+      return true;
+    },
+    finish: () => {
+      if (tool === "room" && draft.length >= 3) closeRoom(draft);
+      setDraft([]);
+    },
+    cancel: () => {
+      setDraft([]);
+      props.onMeasure(null);
+    },
+    undoPoint: () => {
+      if (tool === "wall" && draft.length > 1) {
+        // Remove the last wall drawn in this chain.
+        const last = draft[draft.length - 1], prev = draft[draft.length - 2];
+        const w = [...g.walls].reverse().find((x) => samePt(x.a, prev) && samePt(x.b, last));
+        if (w) commitGeometry({ ...g, walls: g.walls.filter((x) => x.id !== w.id), openings: g.openings.filter((o) => o.wallId !== w.id) });
+      }
+      setDraft((d) => d.slice(0, -1));
+    },
+    exportPng: () => stageRef.current?.toDataURL({ pixelRatio: 2, mimeType: "image/png" }) ?? null,
+    isDrafting: () => draft.length > 0,
+  }));
 
-  // Test hook: lets browser automation locate canvas nodes (no data beyond what is rendered).
+  // Test hook: lets browser automation locate canvas nodes and convert coordinates.
   React.useEffect(() => {
-    (window as unknown as { __habitatStage?: Konva.Stage | null }).__habitatStage = stageRef.current;
+    (window as unknown as { __habitatStage?: Konva.Stage | null; __habitatView?: typeof view }).__habitatStage = stageRef.current;
+    (window as unknown as { __habitatView?: typeof view }).__habitatView = view;
   });
 
-  // Attach the transformer to the selected room or furniture node.
-  React.useEffect(() => {
-    const tr = trRef.current;
-    const stage = stageRef.current;
-    if (!tr || !stage) return;
-    const obj = selection?.kind === "object" ? doc.objects.find((o) => o.id === selection.id) : null;
-    const node = editable && selection && !(obj && obj.kind === "asset") ? stage.findOne(`#${selection.id}`) : null;
-    tr.nodes(node ? [node] : []);
-    tr.getLayer()?.batchDraw();
-  }, [selection, editable, doc]);
-
-  const s = view.scale;
-  const px = (n: number) => n / s; // screen px → world units
-
-  // ---------------------------------------------------------------------
-  // Room handlers
-  // ---------------------------------------------------------------------
-  const roomDragMove = (room: RoomShape) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    const node = e.target;
-    const others = doc.rooms.filter((r) => r.id !== room.id);
-    const res = alignRect({ x: node.x(), y: node.y(), width: room.width, height: room.height }, others, px(10));
-    node.position({ x: res.x, y: res.y });
-    setGuides(res.guides);
-  };
-  const roomDragEnd = (room: RoomShape) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    setGuides([]);
-    const node = e.target;
-    onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? { ...r, x: Math.round(node.x()), y: Math.round(node.y()) } : r)) });
-  };
-  const roomTransformEnd = (room: RoomShape) => (e: Konva.KonvaEventObject<Event>) => {
-    const node = e.target;
-    const w = Math.max(MIN_ROOM_CM, snap(room.width * node.scaleX(), GRID_CM));
-    const h = Math.max(MIN_ROOM_CM, snap(room.height * node.scaleY(), GRID_CM));
-    const x = snap(node.x(), GRID_CM);
-    const y = snap(node.y(), GRID_CM);
-    node.scale({ x: 1, y: 1 });
-    node.position({ x, y });
-    onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? { ...r, x, y, width: w, height: h } : r)) });
+  // ---------------------------------------------------------------- stage events
+  const onMouseMove = (e?: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    const p = worldPointer(e?.evt);
+    if (!p) return;
+    if (!drawing) {
+      props.onCursor(p, null);
+      return;
+    }
+    let from: Pt | null = draft.length ? draft[draft.length - 1] : null;
+    if (tool === "dimension" && dimOffsetStage) from = null;
+    const snap = tool === "door" || tool === "window" || tool === "opening" ? { point: p, kind: "none" as const, guides: [] } : snapPoint(p, snapCtx(from));
+    setCursor(snap);
+    props.onCursor(snap.point, snap.kind);
   };
 
-  // ---------------------------------------------------------------------
-  // Object handlers (centre-anchored groups)
-  // ---------------------------------------------------------------------
-  const objectDragMove = (o: PlanObject) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    if (o.kind === "asset") return;
-    const node = e.target;
-    const b = objectBounds(o);
-    const moving = { x: node.x() - b.width / 2, y: node.y() - b.height / 2, width: b.width, height: b.height };
-    const res = alignRect(moving, doc.rooms, px(8), 5);
-    node.position({ x: res.x + b.width / 2, y: res.y + b.height / 2 });
-    setGuides(res.guides);
-  };
-  const objectDragEnd = (o: PlanObject) => (e: Konva.KonvaEventObject<DragEvent>) => {
-    setGuides([]);
-    const node = e.target;
-    const x = Math.round(node.x() - o.width / 2);
-    const y = Math.round(node.y() - o.height / 2);
-    onCommit({ ...doc, objects: doc.objects.map((p) => (p.id === o.id ? { ...p, x, y } : p)) });
-  };
-  const objectTransformEnd = (o: PlanObject) => (e: Konva.KonvaEventObject<Event>) => {
-    const node = e.target;
-    // Transformer scales along screen axes; map back onto the unrotated box.
-    const rotated = o.rotation % 180 !== 0;
-    const w = Math.max(MIN_OBJECT_CM, snap(o.width * (rotated ? node.scaleY() : node.scaleX()), 5));
-    const h = Math.max(MIN_OBJECT_CM, snap(o.height * (rotated ? node.scaleX() : node.scaleY()), 5));
-    node.scale({ x: 1, y: 1 });
-    const cx = node.x();
-    const cy = node.y();
-    onCommit({ ...doc, objects: doc.objects.map((p) => (p.id === o.id ? { ...p, width: w, height: h, x: Math.round(cx - w / 2), y: Math.round(cy - h / 2) } : p)) });
+  const onStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    if ("button" in e.evt && e.evt.button !== 0) return;
+    if (drawing) {
+      const p = worldPointer(e.evt);
+      if (!p) return;
+      if (tool === "door" || tool === "window" || tool === "opening") return void placeOpening(tool, p);
+      if (tool === "text") return props.onRequestText(roundPt(snapPoint(p, snapCtx(null)).point));
+      if (tool === "dimension" && dimOffsetStage && draft.length === 2) {
+        const [a, b] = draft;
+        const n = perp(unit(sub(b, a)));
+        const offset = Math.round(projectSigned(p, a, n));
+        commitGeometry({ ...g, dimensions: [...g.dimensions, { id: newId(), a, b, offset: offset || 40 }] });
+        setDraft([]);
+        return;
+      }
+      const from = draft.length ? draft[draft.length - 1] : null;
+      const snap = snapPoint(p, snapCtx(from));
+      return placePoint(snap.point, snap);
+    }
+    if (e.target === e.target.getStage() || e.target.name() === "backdrop") onSelect(null);
   };
 
-  // ---------------------------------------------------------------------
-  // Stage gestures
-  // ---------------------------------------------------------------------
+  // Double-click finishes a chain — but only once there is something to finish. (Konva
+  // reports any two quick clicks on the stage as a double-click, including the first click
+  // of a new wall right after another click.)
+  const onDblClick = () => {
+    if (tool === "wall" && draft.length >= 3) setDraft([]);
+    if (tool === "room" && draft.length >= 4) {
+      closeRoom(draft.slice(0, -1));
+      setDraft([]);
+    }
+  };
+
   const onWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
-    const stage = stageRef.current!;
-    const pointer = stage.getPointerPosition() ?? { x: width / 2, y: height / 2 };
-    if (e.evt.ctrlKey || e.evt.metaKey) {
-      zoomAround(Math.exp(-e.evt.deltaY * 0.01), pointer);
-    } else {
-      setView((v) => ({ ...v, x: v.x - e.evt.deltaX, y: v.y - e.evt.deltaY }));
-    }
+    const pointer = stageRef.current!.getPointerPosition() ?? { x: width / 2, y: height / 2 };
+    if (e.evt.ctrlKey || e.evt.metaKey) zoomAround(Math.exp(-e.evt.deltaY * 0.01), pointer);
+    else setView((v) => ({ ...v, x: v.x - e.evt.deltaX, y: v.y - e.evt.deltaY }));
   };
 
   const onTouchMove = (e: Konva.KonvaEventObject<TouchEvent>) => {
     const t = e.evt.touches;
-    if (t.length !== 2) return;
+    if (t.length !== 2) return onMouseMove(e);
     e.evt.preventDefault();
     const stage = stageRef.current!;
     if (stage.isDragging()) stage.stopDrag();
     const rect = stage.container().getBoundingClientRect();
     const a = { x: t[0].clientX - rect.left, y: t[0].clientY - rect.top };
     const b = { x: t[1].clientX - rect.left, y: t[1].clientY - rect.top };
-    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
     const centre = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     if (pinch.current) {
-      zoomAround(dist / pinch.current.dist, centre);
+      zoomAround(d / pinch.current.dist, centre);
       setView((v) => ({ ...v, x: v.x + centre.x - pinch.current!.centre.x, y: v.y + centre.y - pinch.current!.centre.y }));
     }
-    pinch.current = { dist, centre };
+    pinch.current = { dist: d, centre };
   };
 
-  const onStageDragEnd = (e: Konva.KonvaEventObject<DragEvent>) => {
-    if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
+  const stageDraggable = !drawing || spaceDown;
+
+  // react-konva applies new event handlers through its own reconciler, which can lag a
+  // render by a moment; route stage events through a ref so the latest logic always runs.
+  const latest = React.useRef({ onStageClick, onMouseMove, onDblClick, onTouchMove });
+  React.useLayoutEffect(() => {
+    latest.current = { onStageClick, onMouseMove, onDblClick, onTouchMove };
+  });
+  const stageHandlers = React.useMemo(
+    () => ({
+      onClick: (e: Konva.KonvaEventObject<MouseEvent>) => latest.current.onStageClick(e),
+      onTap: (e: Konva.KonvaEventObject<TouchEvent>) => latest.current.onStageClick(e),
+      onMouseMove: (e: Konva.KonvaEventObject<MouseEvent>) => latest.current.onMouseMove(e),
+      onTouchMove: (e: Konva.KonvaEventObject<TouchEvent>) => latest.current.onTouchMove(e),
+      onDblClick: () => latest.current.onDblClick(),
+      onDblTap: () => latest.current.onDblClick(),
+    }),
+    [],
+  );
+
+  // ---------------------------------------------------------------- element handlers (select mode)
+  const selectable = editable && tool === "select";
+  const isSel = (kind: SelectionKind, id: string) => selection?.kind === kind && selection.id === id;
+
+  const cornerDrag = (from: Pt) => ({
+    onDragMove: (e: Konva.KonvaEventObject<DragEvent>) => {
+      const raw = { x: e.target.x(), y: e.target.y() };
+      const snap = snapPoint(raw, snapCtx(null, (w) => samePt(w.a, from) || samePt(w.b, from)));
+      e.target.position(snap.point);
+      setCursor(snap);
+      setPreview(moveCorner(g, from, snap.point));
+    },
+    onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => {
+      e.cancelBubble = true;
+      const to = roundPt({ x: e.target.x(), y: e.target.y() });
+      setPreview(null);
+      setCursor(null);
+      commitGeometry(moveCorner(g, from, to));
+    },
+  });
+
+  // ---------------------------------------------------------------- render helpers
+  const wallById = new Map(geo.walls.map((w) => [w.id, w]));
+
+  const renderWall = (w: Wall) => {
+    const d = wallDir(w);
+    const n = mul(perp(d), w.thickness / 2);
+    const Lw = wallLength(w);
+    const sel = isSel("wall", w.id);
+    const segs = wallSegments(w, geo.openings);
+    const colour = sel ? PLAN.accent : PLAN.wall;
+    return (
+      <Group key={w.id}>
+        {segs.map(([t0, t1], i) => {
+          // Extend real wall ends by half the thickness so corners close; not at opening edges.
+          const e0 = t0 <= 0.01 ? -w.thickness / 2 : t0;
+          const e1 = t1 >= Lw - 0.01 ? Lw + w.thickness / 2 : t1;
+          const a = add(w.a, mul(d, e0));
+          const b = add(w.a, mul(d, e1));
+          const pts = [add(a, n), add(b, n), sub(b, n), sub(a, n)];
+          return <Line key={i} points={pts.flatMap((p) => [p.x, p.y])} closed fill={colour} stroke={colour} strokeWidth={px(0.5)} listening={false} />;
+        })}
+        {/* Hit area spans the whole wall (including openings) */}
+        <Line
+          id={w.id}
+          points={[w.a.x, w.a.y, w.b.x, w.b.y]}
+          stroke="transparent"
+          strokeWidth={Math.max(w.thickness, px(14))}
+          hitStrokeWidth={Math.max(w.thickness, px(14))}
+          listening={selectable || !editable}
+          draggable={selectable && sel}
+          onClick={() => selectable && onSelect({ kind: "wall", id: w.id })}
+          onTap={() => selectable && onSelect({ kind: "wall", id: w.id })}
+          onMouseEnter={(e) => selectable && (e.target.getStage()!.container().style.cursor = sel ? "move" : "pointer")}
+          onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")}
+          onDragMove={(e) => setPreview(moveWall(g, w.id, e.target.x(), e.target.y()))}
+          onDragEnd={(e) => {
+            e.cancelBubble = true;
+            const dx = Math.round(e.target.x()), dy = Math.round(e.target.y());
+            e.target.position({ x: 0, y: 0 });
+            setPreview(null);
+            commitGeometry(moveWall(g, w.id, dx, dy));
+          }}
+        />
+        {sel && selectable && (
+          <>
+            <LengthTag a={w.a} b={w.b} offset={w.thickness / 2 + px(16)} px={px} text={formatLength(Lw, { precise: true })} />
+            {[w.a, w.b].map((p, i) => (
+              <Rect key={i} x={p.x} y={p.y} offsetX={px(6)} offsetY={px(6)} width={px(12)} height={px(12)} fill={PLAN.white} stroke={PLAN.accent} strokeWidth={px(2)} draggable {...cornerDrag(p)} onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = "crosshair")} onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")} />
+            ))}
+          </>
+        )}
+      </Group>
+    );
   };
 
-  const onStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-    if (e.target === e.target.getStage() || e.target.name() === "backdrop") onSelect(null);
+  const renderOpening = (o: Opening) => {
+    const w = wallById.get(o.wallId);
+    if (!w) return null;
+    const { start, end } = openingSpan(w, o);
+    const d = wallDir(w);
+    const side = o.flip ? -1 : 1;
+    const nrm = mul(perp(d), side);
+    const half = w.thickness / 2;
+    const sel = isSel("opening", o.id);
+    const col = sel ? PLAN.accent : PLAN.wall;
+    const hitPts = [add(start, mul(perp(d), half + px(4))), add(end, mul(perp(d), half + px(4))), sub(end, mul(perp(d), half + px(4))), sub(start, mul(perp(d), half + px(4)))];
+    return (
+      <Group key={o.id}>
+        {o.kind === "window" && (
+          <>
+            <Line points={[...flat(add(start, mul(perp(d), half))), ...flat(add(end, mul(perp(d), half))), ...flat(sub(end, mul(perp(d), half))), ...flat(sub(start, mul(perp(d), half)))]} closed fill="#ffffff" stroke={col} strokeWidth={px(1.25)} listening={false} />
+            <Line points={[...flat(start), ...flat(end)]} stroke={col} strokeWidth={px(1.25)} listening={false} />
+          </>
+        )}
+        {o.kind === "door" && (() => {
+          const hinge = o.hingeEnd ? end : start;
+          const closed = o.hingeEnd ? start : end;
+          const tip = add(hinge, mul(nrm, -o.width));
+          return (
+            <>
+              <Line points={[...flat(add(hinge, mul(perp(d), half))), ...flat(sub(hinge, mul(perp(d), half)))]} stroke={col} strokeWidth={px(1.5)} listening={false} />
+              <Line points={[...flat(hinge), ...flat(tip)]} stroke={col} strokeWidth={px(2)} listening={false} />
+              <Shape
+                listening={false}
+                stroke={col}
+                strokeWidth={px(1)}
+                dash={[px(4), px(3)]}
+                sceneFunc={(ctx, shape) => {
+                  const a0 = Math.atan2(closed.y - hinge.y, closed.x - hinge.x);
+                  const a1 = Math.atan2(tip.y - hinge.y, tip.x - hinge.x);
+                  let delta = a1 - a0;
+                  while (delta > Math.PI) delta -= 2 * Math.PI;
+                  while (delta < -Math.PI) delta += 2 * Math.PI;
+                  ctx.beginPath();
+                  ctx.arc(hinge.x, hinge.y, o.width, a0, a1, delta < 0);
+                  ctx.strokeShape(shape);
+                }}
+              />
+            </>
+          );
+        })()}
+        {o.kind === "opening" && (
+          <>
+            <Line points={[...flat(add(start, mul(perp(d), half))), ...flat(sub(start, mul(perp(d), half)))]} stroke={col} strokeWidth={px(1.5)} listening={false} />
+            <Line points={[...flat(add(end, mul(perp(d), half))), ...flat(sub(end, mul(perp(d), half)))]} stroke={col} strokeWidth={px(1.5)} listening={false} />
+            <Line points={[...flat(start), ...flat(end)]} stroke={col} strokeWidth={px(1)} dash={[px(5), px(4)]} listening={false} />
+          </>
+        )}
+        <Line
+          id={o.id}
+          points={hitPts.flatMap((p) => [p.x, p.y])}
+          closed
+          fill={sel ? "rgba(66,99,79,0.12)" : "transparent"}
+          listening={selectable}
+          draggable={selectable && sel}
+          dragBoundFunc={(pos) => {
+            // Slide only along the wall: project the drag onto the wall direction (screen space).
+            const base = { x: view.x, y: view.y };
+            const t = dot2(sub(pos, base), d);
+            return add(base, mul(d, t));
+          }}
+          onDragMove={(e) => {
+            const shift = { x: e.target.x(), y: e.target.y() };
+            const offset = o.offset + dot2(shift, d);
+            setPreview({ ...g, openings: g.openings.map((x) => (x.id === o.id ? { ...x, ...clampOpening(w, { ...x, offset }) } : x)) });
+          }}
+          onDragEnd={(e) => {
+            e.cancelBubble = true;
+            const shift = { x: e.target.x(), y: e.target.y() };
+            e.target.position({ x: 0, y: 0 });
+            const offset = Math.round(o.offset + dot2(shift, d));
+            setPreview(null);
+            commitGeometry({ ...g, openings: g.openings.map((x) => (x.id === o.id ? { ...x, ...clampOpening(w, { ...x, offset }) } : x)) });
+          }}
+          onClick={() => onSelect({ kind: "opening", id: o.id })}
+          onTap={() => onSelect({ kind: "opening", id: o.id })}
+          onMouseEnter={(e) => selectable && (e.target.getStage()!.container().style.cursor = sel ? "ew-resize" : "pointer")}
+          onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")}
+        />
+      </Group>
+    );
   };
 
-  const selectedRoom = selection?.kind === "room" ? doc.rooms.find((r) => r.id === selection.id) : null;
-  const labelSize = Math.min(px(13), 60);
+  const renderRoom = (room: FloorDoc["rooms"][number]) => {
+    const pts = roomPreview?.id === room.id ? roomPreview.pts : roomPolygon(room);
+    const sel = isSel("room", room.id);
+    const c = polygonCentroid(pts);
+    const area = polygonArea(pts);
+    const showLabel = room.width * s > 56 && room.height * s > 30;
+    const labelSize = Math.min(px(13), 60);
+    return (
+      <Group key={room.id}>
+        <Line
+          id={room.id}
+          points={pts.flatMap((p) => [p.x, p.y])}
+          closed
+          fill={sel ? ROOM_FILL_SELECTED : ROOM_FILL[room.roomType] ?? ROOM_FILL.other}
+          stroke={sel ? PLAN.accent : g.walls.length ? "transparent" : PLAN.wall}
+          strokeWidth={sel ? px(2) : g.walls.length ? 0 : 6}
+          dash={sel ? [px(6), px(4)] : undefined}
+          listening={selectable || !editable}
+          draggable={selectable && sel}
+          onClick={() => onSelect({ kind: "room", id: room.id })}
+          onTap={() => onSelect({ kind: "room", id: room.id })}
+          onDragEnd={(e) => {
+            e.cancelBubble = true;
+            const dx = Math.round(e.target.x()), dy = Math.round(e.target.y());
+            e.target.position({ x: 0, y: 0 });
+            onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? moveRoom(r, dx, dy) : r)) });
+          }}
+        />
+        {showLabel && L.rooms && (
+          <Group x={c.x} y={c.y} listening={false}>
+            <Text text={room.name} x={-room.width / 2} width={room.width} y={-labelSize} align="center" fontSize={labelSize} fontStyle="600" fill={PLAN.label} fontFamily={FONT} wrap="none" ellipsis />
+            <Text text={`${illustrative ? "≈ " : ""}${formatArea(area)}`} x={-room.width / 2} width={room.width} y={labelSize * 0.25} align="center" fontSize={labelSize * 0.85} fill={PLAN.labelMuted} fontFamily={FONT} />
+          </Group>
+        )}
+        {sel && selectable &&
+          pts.map((p, i) => (
+            <Circle
+              key={i}
+              x={p.x}
+              y={p.y}
+              radius={px(6)}
+              fill={PLAN.white}
+              stroke={PLAN.accent}
+              strokeWidth={px(2)}
+              draggable
+              onDragMove={(e) => {
+                const snap = snapPoint({ x: e.target.x(), y: e.target.y() }, snapCtx(null));
+                e.target.position(snap.point);
+                setCursor(snap);
+                setRoomPreview({ id: room.id, pts: pts.map((q, j) => (j === i ? snap.point : q)) });
+              }}
+              onDragEnd={(e) => {
+                e.cancelBubble = true;
+                const next = pts.map((q, j) => (j === i ? roundPt({ x: e.target.x(), y: e.target.y() }) : q));
+                setRoomPreview(null);
+                setCursor(null);
+                onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? withPolygon(r, next) : r)) });
+              }}
+            />
+          ))}
+      </Group>
+    );
+  };
+
+  const renderDimension = (d: Geometry["dimensions"][number], key: string, draftMode = false) => {
+    const n = perp(unit(sub(d.b, d.a)));
+    const a = add(d.a, mul(n, d.offset));
+    const b = add(d.b, mul(n, d.offset));
+    const sel = !draftMode && isSel("dimension", d.id);
+    const col = sel ? PLAN.accent : "#4b5a52";
+    const tick = (p: Pt) => {
+      const t = mul(unit(add(unit(sub(b, a)), n)), px(6));
+      return [p.x - t.x, p.y - t.y, p.x + t.x, p.y + t.y];
+    };
+    const mid = lerp(a, b, 0.5);
+    let ang = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+    if (ang > 90 || ang < -90) ang += 180;
+    const text = formatLength(dist(d.a, d.b), { precise: true });
+    return (
+      <Group key={key} listening={!draftMode && selectable} onClick={() => onSelect({ kind: "dimension", id: d.id })} onTap={() => onSelect({ kind: "dimension", id: d.id })}>
+        <Line points={[d.a.x, d.a.y, a.x + n.x * px(4) * Math.sign(d.offset || 1), a.y + n.y * px(4) * Math.sign(d.offset || 1)]} stroke={col} strokeWidth={px(0.75)} />
+        <Line points={[d.b.x, d.b.y, b.x + n.x * px(4) * Math.sign(d.offset || 1), b.y + n.y * px(4) * Math.sign(d.offset || 1)]} stroke={col} strokeWidth={px(0.75)} />
+        <Line points={[a.x, a.y, b.x, b.y]} stroke={col} strokeWidth={px(1)} hitStrokeWidth={px(12)} />
+        <Line points={tick(a)} stroke={col} strokeWidth={px(1.5)} />
+        <Line points={tick(b)} stroke={col} strokeWidth={px(1.5)} />
+        <Group x={mid.x} y={mid.y} rotation={ang}>
+          <Rect x={-px(text.length * 3.4 + 4)} y={-px(17)} width={px(text.length * 6.8 + 8)} height={px(14)} fill={PLAN.bg} opacity={0.9} />
+          <Text text={text} x={-px(80)} width={px(160)} y={-px(16)} align="center" fontSize={px(11)} fontStyle="600" fill={col} fontFamily={FONT} />
+        </Group>
+      </Group>
+    );
+  };
+
+  // ---------------------------------------------------------------- draft preview
+  const renderDraft = () => {
+    if (!drawing || !cursor) return null;
+    const p = cursor.point;
+    const nodes: React.ReactNode[] = [];
+    const last = draft[draft.length - 1];
+    if ((tool === "wall" || tool === "measure" || (tool === "dimension" && !dimOffsetStage)) && last) {
+      if (tool === "wall") {
+        const tmp: Wall = { id: "draft", a: last, b: p, thickness: settings.wallThickness };
+        const n = mul(perp(wallDir(tmp)), tmp.thickness / 2);
+        nodes.push(<Line key="dw" points={[...flat(add(last, n)), ...flat(add(p, n)), ...flat(sub(p, n)), ...flat(sub(last, n))]} closed fill="rgba(66,99,79,0.35)" stroke={PLAN.accent} strokeWidth={px(1)} listening={false} />);
+      } else {
+        nodes.push(<Line key="dl" points={[...flat(last), ...flat(p)]} stroke={PLAN.accent} strokeWidth={px(1.5)} dash={[px(6), px(4)]} listening={false} />);
+      }
+      nodes.push(<LengthTag key="dt" a={last} b={p} offset={px(18)} px={px} text={`${formatLength(dist(last, p), { precise: true })} · ${Math.round(angleDeg(last, p))}°`} />);
+    }
+    if (tool === "room" && draft.length) {
+      const pts = [...draft, p];
+      nodes.push(<Line key="dr" points={pts.flatMap((q) => [q.x, q.y])} closed={draft.length >= 2} fill="rgba(66,99,79,0.12)" stroke={PLAN.accent} strokeWidth={px(1.5)} dash={[px(6), px(4)]} listening={false} />);
+      nodes.push(<LengthTag key="dt" a={last} b={p} offset={px(18)} px={px} text={formatLength(dist(last, p), { precise: true })} />);
+      if (draft.length >= 3) nodes.push(<Circle key="close" x={draft[0].x} y={draft[0].y} radius={px(8)} stroke={PLAN.accent} strokeWidth={px(2)} listening={false} />);
+      if (draft.length >= 2) nodes.push(<Text key="ar" x={p.x + px(14)} y={p.y + px(10)} text={formatArea(polygonArea(pts))} fontSize={px(11)} fill={PLAN.accent} fontStyle="600" fontFamily={FONT} listening={false} />);
+    }
+    if (tool === "dimension" && dimOffsetStage && draft.length === 2) {
+      const [a, b] = draft;
+      const n = perp(unit(sub(b, a)));
+      nodes.push(renderDimension({ id: "draft", a, b, offset: Math.round(projectSigned(p, a, n)) || 40 }, "dd", true));
+    }
+    if (tool === "door" || tool === "window" || tool === "opening") {
+      const hit = nearestWall(g.walls, p, px(24) + 20);
+      if (hit) {
+        const d = DEFAULTS[tool];
+        const c = clampOpening(hit.wall, { offset: hit.offset, width: d.width });
+        const sp = openingSpan(hit.wall, c);
+        nodes.push(<Line key="op" points={[...flat(sp.start), ...flat(sp.end)]} stroke={PLAN.accent} strokeWidth={hit.wall.thickness + px(4)} opacity={0.5} listening={false} />);
+        nodes.push(<LengthTag key="opt" a={sp.start} b={sp.end} offset={hit.wall.thickness / 2 + px(14)} px={px} text={`${tool} ${formatLength(d.width, { precise: true })}`} />);
+      }
+    }
+    // Snap marker and tracking guides
+    for (const [i, gd] of cursor.guides.entries()) {
+      nodes.push(<Line key={`g${i}`} points={[gd.a.x, gd.a.y, gd.b.x, gd.b.y]} stroke={PLAN.guide} strokeWidth={px(1)} dash={[px(3), px(4)]} opacity={0.8} listening={false} />);
+    }
+    nodes.push(<SnapGlyph key="snap" p={p} kind={cursor.kind} px={px} />);
+    draft.forEach((q, i) => nodes.push(<Circle key={`dp${i}`} x={q.x} y={q.y} radius={px(3)} fill={PLAN.accent} listening={false} />));
+    return nodes;
+  };
+
+  // ---------------------------------------------------------------- furniture & markers (as before)
+  const objectDragEnd = (o: PlanObject) => (e: Konva.KonvaEventObject<DragEvent>) => {
+    e.cancelBubble = true;
+    const node = e.target;
+    const x = Math.round(node.x() - o.width / 2);
+    const y = Math.round(node.y() - o.height / 2);
+    onCommit({ ...doc, objects: doc.objects.map((p) => (p.id === o.id ? { ...p, x, y } : p)) });
+  };
+
+  const labelSize = (n: number) => n;
 
   return (
     <div
       ref={containerRef}
       role="application"
       aria-label={props.ariaLabel}
-      aria-roledescription="floor plan"
+      aria-roledescription="floor plan drawing"
       tabIndex={0}
       onKeyDown={props.onKeyDown}
+      onMouseLeave={() => {
+        setCursor(null);
+        props.onCursor(null, null);
+      }}
       onDragOver={(e) => {
         if (editable && e.dataTransfer.types.includes("application/x-habitat-asset")) {
           e.preventDefault();
@@ -261,7 +743,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
         if (p) onDropAsset(assetId, { x: (p.x - view.x) / view.scale, y: (p.y - view.y) / view.scale });
       }}
       className="relative w-full touch-none select-none overflow-hidden bg-[var(--plan-bg)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      style={{ height }}
+      style={{ height, cursor: drawing && !spaceDown ? "crosshair" : undefined }}
     >
       {width > 0 && (
         <Stage
@@ -272,172 +754,169 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           scaleY={s}
           x={view.x}
           y={view.y}
-          draggable
-          onDragEnd={onStageDragEnd}
+          draggable={stageDraggable}
+          onDragEnd={(e) => {
+            if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
+          }}
           onWheel={onWheel}
-          onTouchMove={onTouchMove}
+          {...stageHandlers}
           onTouchEnd={() => (pinch.current = null)}
-          onClick={onStageClick}
-          onTap={onStageClick}
         >
-          {/* Grid */}
           <Layer listening={false}>
-            <Rect name="backdrop" x={-2000} y={-2000} width={extent.width + 4000} height={extent.height + 4000} fill={PLAN.bg} />
-            {s > 0.18 && <GridShape extent={extent} step={50} colour={PLAN.grid} />}
-            <GridShape extent={extent} step={100} colour={PLAN.gridMajor} />
+            <Rect name="backdrop" x={-5000} y={-5000} width={extent.width + 10000} height={extent.height + 10000} fill={PLAN.bg} />
+            {L.grid && s > 0.18 && <GridShape extent={extent} step={50} colour={PLAN.grid} />}
+            {L.grid && <GridShape extent={extent} step={100} colour={PLAN.gridMajor} />}
           </Layer>
 
-          <Layer>
-            {/* Rooms */}
-            {doc.rooms.map((room) => {
-              const isSel = selection?.kind === "room" && selection.id === room.id;
-              const showLabel = room.width * s > 56 && room.height * s > 34;
-              return (
-                <Group
-                  key={room.id}
-                  id={room.id}
-                  x={room.x}
-                  y={room.y}
-                  draggable={editable}
-                  onDragStart={() => onSelect({ kind: "room", id: room.id })}
-                  onDragMove={roomDragMove(room)}
-                  onDragEnd={roomDragEnd(room)}
-                  onTransformEnd={roomTransformEnd(room)}
-                  onClick={() => onSelect({ kind: "room", id: room.id })}
-                  onTap={() => onSelect({ kind: "room", id: room.id })}
-                  onMouseEnter={(e) => editable && (e.target.getStage()!.container().style.cursor = "move")}
-                  onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")}
-                >
-                  <Rect width={room.width} height={room.height} fill={isSel ? ROOM_FILL_SELECTED : ROOM_FILL[room.roomType] ?? ROOM_FILL.other} stroke={PLAN.wall} strokeWidth={8} />
-                  {showLabel && (
-                    <>
-                      <Text text={room.name} x={px(9)} y={px(8)} width={Math.max(10, room.width - px(18))} fontSize={labelSize} fontStyle="600" fill={PLAN.label} fontFamily="Instrument Sans, system-ui, sans-serif" wrap="none" ellipsis listening={false} />
-                      {room.height * s > 54 && (
-                        <Text text={`${illustrative ? "≈ " : ""}${areaM2(room)} m²`} x={px(9)} y={px(8) + labelSize * 1.35} fontSize={labelSize * 0.86} fill={PLAN.labelMuted} fontFamily="Instrument Sans, system-ui, sans-serif" listening={false} />
-                      )}
-                    </>
-                  )}
-                </Group>
-              );
-            })}
+          <Layer listening={!drawing}>
+            {L.rooms && doc.rooms.map(renderRoom)}
 
-            {/* Furniture: outer group (unrotated, centre origin) is the drag/transform target; the
-                inner group carries the 90°-step rotation so labels stay horizontal. */}
-            {doc.objects.filter((o) => o.kind !== "asset").map((o) => {
-              const isSel = selection?.kind === "object" && selection.id === o.id;
-              const b = objectBounds(o);
-              return (
-                <Group
-                  key={o.id}
-                  id={o.id}
-                  x={o.x + o.width / 2}
-                  y={o.y + o.height / 2}
-                  draggable={editable}
-                  listening={editable}
-                  onDragStart={() => onSelect({ kind: "object", id: o.id })}
-                  onDragMove={objectDragMove(o)}
-                  onDragEnd={objectDragEnd(o)}
-                  onTransformEnd={objectTransformEnd(o)}
-                  onClick={() => onSelect({ kind: "object", id: o.id })}
-                  onTap={() => onSelect({ kind: "object", id: o.id })}
-                >
-                  <Group rotation={o.rotation} offsetX={o.width / 2} offsetY={o.height / 2}>
-                    <Rect width={o.width} height={o.height} cornerRadius={6} fill={FURNITURE_FILL} stroke={isSel ? PLAN.accent : FURNITURE_STROKE} strokeWidth={isSel ? px(2) : px(1.25)} opacity={editable ? 1 : 0.85} />
-                    <FurnitureDetail o={o} />
-                  </Group>
-                  {b.width * s > 54 && b.height * s > 16 && (
-                    <Text text={o.label ?? ""} x={-b.width / 2} y={-b.height / 2} width={b.width} height={b.height} align="center" verticalAlign="middle" fontSize={Math.min(px(11), b.height * 0.4)} fill={PLAN.labelMuted} fontFamily="Instrument Sans, system-ui, sans-serif" wrap="none" ellipsis listening={false} />
-                  )}
-                </Group>
-              );
-            })}
-
-            {/* Alignment guides */}
-            {guides.map((g, i) =>
-              g.orientation === "vertical" ? (
-                <Line key={i} points={[g.position, g.from - 40, g.position, g.to + 40]} stroke={PLAN.guide} strokeWidth={px(1)} dash={[px(4), px(4)]} listening={false} />
-              ) : (
-                <Line key={i} points={[g.from - 40, g.position, g.to + 40, g.position]} stroke={PLAN.guide} strokeWidth={px(1)} dash={[px(4), px(4)]} listening={false} />
-              ),
-            )}
-
-            {/* Dimensions for the selected room */}
-            {editable && selectedRoom && (
-              <Group listening={false}>
-                <DimLabel x={selectedRoom.x + selectedRoom.width / 2} y={selectedRoom.y - px(14)} text={`${(selectedRoom.width / 100).toFixed(1)} m`} px={px} />
-                <DimLabel x={selectedRoom.x - px(22)} y={selectedRoom.y + selectedRoom.height / 2} text={`${(selectedRoom.height / 100).toFixed(1)} m`} px={px} />
-              </Group>
-            )}
-
-            <Transformer
-              ref={trRef}
-              rotateEnabled={false}
-              keepRatio={false}
-              flipEnabled={false}
-              ignoreStroke
-              borderStroke={PLAN.accent}
-              anchorStroke={PLAN.accent}
-              anchorFill={PLAN.white}
-              anchorSize={10}
-              anchorCornerRadius={2}
-              boundBoxFunc={(oldBox, newBox) => {
-                const min = (selection?.kind === "room" ? MIN_ROOM_CM : MIN_OBJECT_CM) * s;
-                return newBox.width < min || newBox.height < min ? oldBox : newBox;
-              }}
-            />
-          </Layer>
-
-          {/* Asset markers: constant on-screen size */}
-          <Layer>
-            {doc.objects.filter((o) => o.kind === "asset" && o.assetId).map((o) => {
-              const info = markers[o.assetId!];
-              if (!info) return null;
-              const isSel = selection?.kind === "object" && selection.id === o.id;
-              const colour = info.tone === "danger" ? PLAN.danger : info.tone === "warning" ? PLAN.warning : PLAN.accent;
-              const img = iconImage(category(info.categoryId).icon, colour, forceRender);
-              const showName = isSel || hovered === o.id;
-              return (
-                <Group
-                  key={o.id}
-                  id={o.id}
-                  x={o.x + o.width / 2}
-                  y={o.y + o.height / 2}
-                  scaleX={1 / s}
-                  scaleY={1 / s}
-                  draggable={editable}
-                  onDragStart={() => onSelect({ kind: "object", id: o.id })}
-                  onDragEnd={objectDragEnd(o)}
-                  onClick={() => (editable ? onSelect({ kind: "object", id: o.id }) : onOpenAsset(o.assetId!))}
-                  onTap={() => (editable ? onSelect({ kind: "object", id: o.id }) : onOpenAsset(o.assetId!))}
-                  onMouseEnter={(e) => {
-                    setHovered(o.id);
-                    e.target.getStage()!.container().style.cursor = editable ? "move" : "pointer";
-                  }}
-                  onMouseLeave={(e) => {
-                    setHovered(null);
-                    e.target.getStage()!.container().style.cursor = "";
-                  }}
-                >
-                  {isSel && <Circle radius={23} fill={PLAN.accentSoft} stroke={PLAN.accent} strokeWidth={1.5} />}
-                  <Circle radius={17} fill={PLAN.white} stroke={colour} strokeWidth={2.5} shadowColor="#1d221f" shadowOpacity={0.18} shadowBlur={6} shadowOffsetY={2} />
-                  <KImage image={img} width={18} height={18} x={-9} y={-9} listening={false} />
-                  {info.tone !== "neutral" && <Circle x={12} y={-12} radius={5} fill={colour} stroke={PLAN.white} strokeWidth={1.5} listening={false} />}
-                  {showName && (
-                    <Group y={24} listening={false}>
-                      <Rect x={-Math.max(40, info.name.length * 3.6 + 10)} width={Math.max(80, info.name.length * 7.2 + 20)} height={info.reason ? 36 : 22} cornerRadius={4} fill="#1d221f" opacity={0.92} />
-                      <Text text={info.name} x={-Math.max(40, info.name.length * 3.6 + 10)} width={Math.max(80, info.name.length * 7.2 + 20)} y={5} align="center" fontSize={12} fontStyle="600" fill="#fff" fontFamily="Instrument Sans, system-ui, sans-serif" />
-                      {info.reason && <Text text={info.reason} x={-Math.max(40, info.name.length * 3.6 + 10)} width={Math.max(80, info.name.length * 7.2 + 20)} y={20} align="center" fontSize={10.5} fill="#e7e3da" fontFamily="Instrument Sans, system-ui, sans-serif" />}
+            {L.furniture &&
+              doc.objects.filter((o) => o.kind !== "asset").map((o) => {
+                const sel = isSel("object", o.id);
+                const b = objectBounds(o);
+                return (
+                  <Group
+                    key={o.id}
+                    id={o.id}
+                    x={o.x + o.width / 2}
+                    y={o.y + o.height / 2}
+                    draggable={selectable}
+                    listening={selectable}
+                    onDragStart={() => onSelect({ kind: "object", id: o.id })}
+                    onDragEnd={objectDragEnd(o)}
+                    onClick={() => onSelect({ kind: "object", id: o.id })}
+                    onTap={() => onSelect({ kind: "object", id: o.id })}
+                  >
+                    <Group rotation={o.rotation} offsetX={o.width / 2} offsetY={o.height / 2}>
+                      <Rect width={o.width} height={o.height} cornerRadius={6} fill={FURNITURE_FILL} stroke={sel ? PLAN.accent : FURNITURE_STROKE} strokeWidth={sel ? px(2) : px(1.25)} opacity={editable ? 1 : 0.85} />
+                      <FurnitureDetail o={o} />
                     </Group>
-                  )}
-                </Group>
-              );
-            })}
+                    {b.width * s > 54 && b.height * s > 16 && (
+                      <Text text={o.label ?? ""} x={-b.width / 2} y={-b.height / 2} width={b.width} height={b.height} align="center" verticalAlign="middle" fontSize={Math.min(px(11), b.height * 0.4)} fill={PLAN.labelMuted} fontFamily={FONT} wrap="none" ellipsis listening={false} />
+                    )}
+                  </Group>
+                );
+              })}
+
+            {L.walls && geo.walls.map(renderWall)}
+            {L.openings && geo.openings.map(renderOpening)}
+            {L.dimensions && geo.dimensions.map((d) => renderDimension(d, d.id))}
+            {L.labels &&
+              geo.labels.map((lb) => (
+                <Text
+                  key={lb.id}
+                  id={lb.id}
+                  x={lb.at.x}
+                  y={lb.at.y}
+                  text={lb.text}
+                  fontSize={labelSize(lb.size)}
+                  fontStyle="600"
+                  fill={isSel("label", lb.id) ? PLAN.accent : PLAN.label}
+                  fontFamily={FONT}
+                  listening={selectable}
+                  draggable={selectable && isSel("label", lb.id)}
+                  onClick={() => onSelect({ kind: "label", id: lb.id })}
+                  onTap={() => onSelect({ kind: "label", id: lb.id })}
+                  onDragEnd={(e) => {
+                    e.cancelBubble = true;
+                    commitGeometry({ ...g, labels: g.labels.map((x) => (x.id === lb.id ? { ...x, at: roundPt({ x: e.target.x(), y: e.target.y() }) } : x)) });
+                  }}
+                />
+              ))}
           </Layer>
+
+          {/* Appliance markers: constant on-screen size */}
+          <Layer listening={!drawing}>
+            {L.appliances &&
+              doc.objects.filter((o) => o.kind === "asset" && o.assetId).map((o) => {
+                const info = markers[o.assetId!];
+                if (!info) return null;
+                const sel = isSel("object", o.id);
+                const colour = info.tone === "danger" ? PLAN.danger : info.tone === "warning" ? PLAN.warning : PLAN.accent;
+                const img = iconImage(category(info.categoryId).icon, colour, forceRender);
+                const showName = sel || hovered === o.id;
+                const w = Math.max(80, info.name.length * 7.2 + 20);
+                return (
+                  <Group
+                    key={o.id}
+                    id={o.id}
+                    x={o.x + o.width / 2}
+                    y={o.y + o.height / 2}
+                    scaleX={1 / s}
+                    scaleY={1 / s}
+                    draggable={selectable}
+                    onDragStart={() => onSelect({ kind: "object", id: o.id })}
+                    onDragEnd={objectDragEnd(o)}
+                    onClick={() => (editable ? onSelect({ kind: "object", id: o.id }) : onOpenAsset(o.assetId!))}
+                    onTap={() => (editable ? onSelect({ kind: "object", id: o.id }) : onOpenAsset(o.assetId!))}
+                    onMouseEnter={(e) => {
+                      setHovered(o.id);
+                      e.target.getStage()!.container().style.cursor = editable ? "move" : "pointer";
+                    }}
+                    onMouseLeave={(e) => {
+                      setHovered(null);
+                      e.target.getStage()!.container().style.cursor = "";
+                    }}
+                  >
+                    {sel && <Circle radius={23} fill={PLAN.accentSoft} stroke={PLAN.accent} strokeWidth={1.5} />}
+                    <Circle radius={17} fill={PLAN.white} stroke={colour} strokeWidth={2.5} shadowColor="#1d221f" shadowOpacity={0.18} shadowBlur={6} shadowOffsetY={2} />
+                    <KImage image={img} width={18} height={18} x={-9} y={-9} listening={false} />
+                    {info.tone !== "neutral" && <Circle x={12} y={-12} radius={5} fill={colour} stroke={PLAN.white} strokeWidth={1.5} listening={false} />}
+                    {showName && (
+                      <Group y={24} listening={false}>
+                        <Rect x={-w / 2} width={w} height={info.reason ? 36 : 22} cornerRadius={4} fill="#1d221f" opacity={0.92} />
+                        <Text text={info.name} x={-w / 2} width={w} y={5} align="center" fontSize={12} fontStyle="600" fill="#fff" fontFamily={FONT} />
+                        {info.reason && <Text text={info.reason} x={-w / 2} width={w} y={20} align="center" fontSize={10.5} fill="#e7e3da" fontFamily={FONT} />}
+                      </Group>
+                    )}
+                  </Group>
+                );
+              })}
+          </Layer>
+
+          <Layer listening={false}>{renderDraft()}</Layer>
+          {!drawing && cursor && (preview || roomPreview) && (
+            <Layer listening={false}>
+              {cursor.guides.map((gd, i) => <Line key={i} points={[gd.a.x, gd.a.y, gd.b.x, gd.b.y]} stroke={PLAN.guide} strokeWidth={px(1)} dash={[px(3), px(4)]} />)}
+              <SnapGlyph p={cursor.point} kind={cursor.kind} px={px} />
+            </Layer>
+          )}
         </Stage>
       )}
     </div>
   );
 });
+
+// ------------------------------------------------------------------ small pieces
+const flat = (p: Pt) => [p.x, p.y];
+const dot2 = (a: Pt, b: Pt) => a.x * b.x + a.y * b.y;
+/** Signed distance of p from the line through a with unit normal n. */
+function projectSigned(p: Pt, a: Pt, n: Pt) {
+  return dot2(sub(p, a), n);
+}
+
+function LengthTag({ a, b, offset, px, text }: { a: Pt; b: Pt; offset: number; px: (n: number) => number; text: string }) {
+  const n = perp(unit(sub(b, a)));
+  const mid = add(lerp(a, b, 0.5), mul(n, offset));
+  const w = px(text.length * 6.4 + 12);
+  return (
+    <Group x={mid.x} y={mid.y} listening={false}>
+      <Rect x={-w / 2} y={-px(10)} width={w} height={px(20)} cornerRadius={px(4)} fill={PLAN.accent} />
+      <Text text={text} x={-w / 2} y={-px(10)} width={w} height={px(20)} align="center" verticalAlign="middle" fontSize={px(11)} fontStyle="600" fill={PLAN.white} fontFamily={FONT} />
+    </Group>
+  );
+}
+
+function SnapGlyph({ p, kind, px }: { p: Pt; kind: string; px: (n: number) => number }) {
+  const r = px(7);
+  const stroke = PLAN.guide;
+  const sw = px(1.75);
+  if (kind === "endpoint") return <Rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} stroke={stroke} strokeWidth={sw} listening={false} />;
+  if (kind === "midpoint") return <Line points={[p.x, p.y - r, p.x + r, p.y + r * 0.8, p.x - r, p.y + r * 0.8]} closed stroke={stroke} strokeWidth={sw} listening={false} />;
+  if (kind === "on-wall") return <Group listening={false}><Line points={[p.x - r, p.y - r, p.x + r, p.y + r]} stroke={stroke} strokeWidth={sw} /><Line points={[p.x - r, p.y + r, p.x + r, p.y - r]} stroke={stroke} strokeWidth={sw} /></Group>;
+  return <Group listening={false}><Line points={[p.x - r, p.y, p.x + r, p.y]} stroke={stroke} strokeWidth={sw} /><Line points={[p.x, p.y - r, p.x, p.y + r]} stroke={stroke} strokeWidth={sw} /></Group>;
+}
 
 function GridShape({ extent, step, colour }: { extent: { width: number; height: number }; step: number; colour: string }) {
   return (
@@ -448,28 +927,17 @@ function GridShape({ extent, step, colour }: { extent: { width: number; height: 
       strokeScaleEnabled={false}
       sceneFunc={(ctx, shape) => {
         ctx.beginPath();
-        for (let x = 0; x <= extent.width; x += step) {
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, extent.height);
+        for (let x = -2000; x <= extent.width + 2000; x += step) {
+          ctx.moveTo(x, -2000);
+          ctx.lineTo(x, extent.height + 2000);
         }
-        for (let y = 0; y <= extent.height; y += step) {
-          ctx.moveTo(0, y);
-          ctx.lineTo(extent.width, y);
+        for (let y = -2000; y <= extent.height + 2000; y += step) {
+          ctx.moveTo(-2000, y);
+          ctx.lineTo(extent.width + 2000, y);
         }
         ctx.strokeShape(shape);
       }}
     />
-  );
-}
-
-function DimLabel({ x, y, text, px }: { x: number; y: number; text: string; px: (n: number) => number }) {
-  const w = px(44);
-  const h = px(18);
-  return (
-    <Group x={x - w / 2} y={y - h / 2}>
-      <Rect width={w} height={h} cornerRadius={px(3)} fill={PLAN.accent} />
-      <Text text={text} width={w} height={h} align="center" verticalAlign="middle" fontSize={px(11)} fontStyle="600" fill={PLAN.white} fontFamily="Instrument Sans, system-ui, sans-serif" />
-    </Group>
   );
 }
 
@@ -488,14 +956,8 @@ function FurnitureDetail({ o }: { o: PlanObject }) {
       </Group>
     );
   }
-  if (o.furnitureType === "sofa") {
-    return <Rect listening={false} x={12} y={o.height * 0.35} width={o.width - 24} height={o.height * 0.55} cornerRadius={6} stroke={stroke} strokeWidth={2} />;
-  }
-  if (o.furnitureType === "dining_table") {
-    return <Rect listening={false} x={10} y={10} width={o.width - 20} height={o.height - 20} cornerRadius={4} stroke={stroke} strokeWidth={1.5} dash={[6, 4]} />;
-  }
-  if (o.furnitureType === "counter") {
-    return <Line listening={false} points={[0, o.height - 12, o.width, o.height - 12]} stroke={stroke} strokeWidth={2} />;
-  }
+  if (o.furnitureType === "sofa") return <Rect listening={false} x={12} y={o.height * 0.35} width={o.width - 24} height={o.height * 0.55} cornerRadius={6} stroke={stroke} strokeWidth={2} />;
+  if (o.furnitureType === "dining_table") return <Rect listening={false} x={10} y={10} width={o.width - 20} height={o.height - 20} cornerRadius={4} stroke={stroke} strokeWidth={1.5} dash={[6, 4]} />;
+  if (o.furnitureType === "counter") return <Line listening={false} points={[0, o.height - 12, o.width, o.height - 12]} stroke={stroke} strokeWidth={2} />;
   return null;
 }

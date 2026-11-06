@@ -27,7 +27,7 @@ export default async function ThreeDPage({ searchParams }: { searchParams: Promi
   });
   if (!data) return <p className="p-8">Set up your home first.</p>;
   const pins = Object.fromEntries(
-    data.assets.map((a) => [a.id, { assetId: a.id, name: a.name, tone: (a.status === "needs_attention" || a.status === "in_repair" || a.overdue > 0 ? "danger" : "neutral") as "danger" | "neutral" }]),
+    data.assets.map((a) => [a.id, { name: a.name, tone: (a.status === "needs_attention" || a.status === "in_repair" || a.overdue > 0 ? "danger" : "neutral") as "danger" | "neutral" }]),
   );
   return (
     <div className="px-4 py-4 sm:px-6">
@@ -37,7 +37,7 @@ export default async function ThreeDPage({ searchParams }: { searchParams: Promi
         <Badge tone="info">Preview</Badge>
         <p className="w-full text-xs text-fg-muted sm:ml-auto sm:w-auto">Generated from your 2D plan. Edit the layout in the floor plan; walls are shown low so you can see inside.</p>
       </div>
-      <Viewer3DLoader doc={data.doc} pins={pins} />
+      <Viewer3DLoader doc={data.doc} wallHeight={data.floor.wall_height_cm} pins={pins} />
     </div>
   );
 }

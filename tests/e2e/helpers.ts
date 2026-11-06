@@ -23,7 +23,8 @@ export async function signUpWithHome(page: Page, name: string, email: string) {
   await page.getByRole("button", { name: "Get started" }).click();
   await page.getByLabel("Home name").fill(`${name}’s flat`);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Choose a starting layout" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "How do you want to start?" })).toBeVisible();
+  await page.getByText("HDB 4-room", { exact: true }).click();
   await page.getByRole("button", { name: "Use this layout" }).click();
   await expect(page.getByRole("heading", { name: "Add your first appliance" })).toBeVisible();
   await page.getByRole("button", { name: "Skip for now" }).click();

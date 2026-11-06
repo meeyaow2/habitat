@@ -54,5 +54,7 @@ function normalise(d: FloorDoc) {
     objects: [...d.objects]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((o) => ({ ...o, x: round(o.x), y: round(o.y), width: round(o.width), height: round(o.height) })),
+    // Drafting geometry (walls, doors/windows, dimensions, text) is part of the drawing too.
+    geometry: d.geometry ?? null,
   };
 }

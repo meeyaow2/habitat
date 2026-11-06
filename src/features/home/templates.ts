@@ -232,8 +232,8 @@ export const TEMPLATES: HomeTemplate[] = [
   },
   {
     key: "blank",
-    label: "Blank canvas",
-    summary: "Start from an empty plan and draw your own rooms",
+    label: "Draw it yourself",
+    summary: "Empty canvas — draw walls, doors and windows to your own measurements",
     approxAreaM2: null,
     propertyTypes: ["hdb", "condo", "landed", "apartment", "other"],
     floors: [{ name: "Main floor", level: 1, rooms: [] }],

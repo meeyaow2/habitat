@@ -92,6 +92,12 @@ describe("undo/redo history", () => {
     expect(h.past).toHaveLength(HISTORY_LIMIT);
   });
 
+  it("treats wall, door and dimension edits as unsaved changes", () => {
+    const a = doc();
+    const withWall = { ...a, geometry: { ...a.geometry, walls: [{ id: "w", a: { x: 0, y: 0 }, b: { x: 100, y: 0 }, thickness: 10 }] } };
+    expect(docsEqual(a, withWall)).toBe(false);
+  });
+
   it("compares documents for unsaved changes, ignoring float noise and object order", () => {
     const a = doc([room("a", 0, 0, 100, 100)]);
     expect(docsEqual(a, doc([room("a", 0.00001, 0, 100, 100)]))).toBe(true);
