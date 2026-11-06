@@ -9,7 +9,7 @@ import { Input, NativeSelect } from "@/components/ui/input";
 import { Avatar, Notice } from "@/components/ui/misc";
 import { useAction } from "@/lib/client/use-action";
 import { cn } from "@/lib/utils";
-import { deleteAccountAction, setAiConsentAction, updateHouseholdAction, updateProfileAction } from "./actions";
+import { deleteAccountAction, setAiConsentAction, setEmailRemindersAction, updateHouseholdAction, updateProfileAction } from "./actions";
 
 const COLOURS = ["sage", "slate", "clay", "sand", "teal", "plum"] as const;
 
@@ -54,6 +54,20 @@ export function HouseholdForm({ name, reminderDays, isOwner }: { name: string; r
       </Field>
       {isOwner && <div><Button type="submit" variant="primary" loading={save.pending}>Save household</Button></div>}
     </form>
+  );
+}
+
+export function EmailReminders({ enabled, mode }: { enabled: boolean; mode: "resend" | "outbox" | "disabled" }) {
+  const set = useAction(setEmailRemindersAction, { success: "Preference saved" });
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <label className="flex items-start gap-2.5">
+        <input type="checkbox" className="mt-0.5 size-4 accent-[var(--accent)]" checked={enabled} disabled={set.pending} onChange={(e) => set.run({ enabled: e.target.checked })} />
+        <span>Email me a daily digest of overdue tasks and warranties that are about to expire.</span>
+      </label>
+      {mode === "disabled" && <Notice tone="neutral">Email isn’t set up on this server yet, so reminders appear only in the notification bell.</Notice>}
+      {mode === "outbox" && <Notice tone="neutral">Development mode: emails are written to the server’s outbox folder, not sent.</Notice>}
+    </div>
   );
 }
 

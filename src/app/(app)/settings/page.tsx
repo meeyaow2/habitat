@@ -3,7 +3,8 @@ import { PageHeader, Panel, PanelHeader } from "@/components/ui/misc";
 import { authMode, storageMode } from "@/lib/env";
 import { aiConfigured as isAiConfigured } from "@/lib/ai/config";
 import { requireHouseholdContext } from "@/lib/server/context";
-import { AiConsent, DataControls, HouseholdForm, ProfileForm } from "@/features/household/settings-ui";
+import { AiConsent, DataControls, EmailReminders, HouseholdForm, ProfileForm } from "@/features/household/settings-ui";
+import { emailMode } from "@/lib/email";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -30,6 +31,10 @@ export default async function SettingsPage() {
             <div><dt className="text-fg-muted">Time zone</dt><dd className="font-medium">{ctx.profile.timezone}</dd></div>
           </dl>
           <p className="border-t border-line px-4 py-3 text-xs text-fg-subtle sm:px-5">Stored per household and profile. Additional currencies and locales are on the roadmap; amounts are never converted.</p>
+        </Panel>
+        <Panel>
+          <PanelHeader title="Reminders" />
+          <div className="px-4 pb-5 sm:px-5"><EmailReminders enabled={ctx.profile.email_reminders} mode={emailMode()} /></div>
         </Panel>
         <Panel>
           <PanelHeader title="AI features" />

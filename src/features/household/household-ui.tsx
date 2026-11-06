@@ -20,6 +20,7 @@ export function InviteButton({ disabled }: { disabled?: boolean }) {
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<"member" | "owner">("member");
   const [link, setLink] = React.useState<string | null>(null);
+  const [emailed, setEmailed] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const invite = useAction(inviteMemberAction, { silent: true });
   useOnOpen(open, () => { setEmail(""); setRole("member"); setLink(null); setCopied(false); });
@@ -32,7 +33,9 @@ export function InviteButton({ disabled }: { disabled?: boolean }) {
             <>
               <DialogBody className="flex flex-col gap-3">
                 <Notice tone="success" icon={<Check />}>Invitation created for {email}. It expires in 7 days.</Notice>
-                <p className="text-sm text-fg-muted">Email delivery isn’t set up on this server, so share this private link with them directly. It’s shown only once.</p>
+                <p className="text-sm text-fg-muted">
+                  {emailed ? "We’ve emailed them the invitation. You can also share this private link directly — it’s shown only once." : "Email delivery isn’t set up on this server, so share this private link with them directly. It’s shown only once."}
+                </p>
                 <div className="flex gap-2">
                   <Input readOnly value={link} aria-label="Invitation link" onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
                   <Button
@@ -53,7 +56,10 @@ export function InviteButton({ disabled }: { disabled?: boolean }) {
               onSubmit={async (e) => {
                 e.preventDefault();
                 const res = await invite.run({ email, role });
-                if (res) setLink(res.data.url);
+                if (res) {
+                  setLink(res.data.url);
+                  setEmailed(res.data.emailed);
+                }
               }}
             >
               <DialogBody className="flex flex-col gap-4">

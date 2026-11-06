@@ -2,6 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import { hashToken, INVITE_DAYS } from "./tokens";
+import { invitationEmail, sendEmail } from "@/lib/email";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -30,9 +31,13 @@ export const inviteMemberAction = householdAction(inviteSchema, async ({ input, 
     returning id, expires_at
   `;
   await logActivity(tx, { householdId: ctx.household.id, actorId: ctx.user.id, action: "member.invited", entityType: "invitation", entityId: inv.id, summary: `invited ${input.email} as ${input.role}` });
+  const url = `${env.appUrl}/invite/${token}`;
+  const emailed = await sendEmail(
+    invitationEmail({ to: input.email, household: ctx.household.name, inviter: ctx.profile.display_name || "A household owner", url, days: INVITE_DAYS }),
+  ).catch(() => false);
   refresh();
   // The raw token is shown once to the owner and never stored.
-  return { url: `${env.appUrl}/invite/${token}`, email: input.email };
+  return { url, email: input.email, emailed };
 }, "member.invite");
 
 export const revokeInvitationAction = householdAction(z.object({ id }), async ({ input, tx, ctx }) => {
@@ -116,6 +121,11 @@ export const updateProfileAction = householdAction(
   },
   "profile.update",
 );
+
+export const setEmailRemindersAction = householdAction(z.object({ enabled: z.boolean() }), async ({ input, tx, ctx }) => {
+  await tx`update profiles set email_reminders = ${input.enabled} where id = ${ctx.user.id}`;
+  refresh();
+}, "profile.email-reminders");
 
 export const setAiConsentAction = householdAction(z.object({ consent: z.boolean() }), async ({ input, tx, ctx }) => {
   await tx`update profiles set ai_consent_at = ${input.consent ? tx`now()` : null} where id = ${ctx.user.id}`;

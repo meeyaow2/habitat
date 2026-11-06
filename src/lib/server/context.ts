@@ -19,6 +19,7 @@ export type Profile = {
   onboarding_step: string;
   onboarding_completed_at: string | null;
   ai_consent_at: string | null;
+  email_reminders: boolean;
 };
 
 export type Household = {
@@ -49,7 +50,7 @@ export const getAppContext = cache(async (): Promise<AppContext | null> => {
   return withUser(user.id, async (tx) => {
     const [profile] = await tx<Profile[]>`
       select id, display_name, avatar_color, locale, currency, timezone, is_demo,
-             active_household_id, onboarding_step, onboarding_completed_at, ai_consent_at
+             active_household_id, onboarding_step, onboarding_completed_at, ai_consent_at, email_reminders
       from profiles where id = ${user.id}
     `;
     if (!profile) return null;

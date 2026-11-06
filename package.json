@@ -16,7 +16,8 @@
     "db:reset": "tsx --env-file-if-exists=.env.local scripts/db.ts reset",
     "db:seed": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/db.ts seed",
     "db:cleanup-demo": "tsx --env-file-if-exists=.env.local scripts/db.ts cleanup-demo",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "jobs:reminders": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/jobs.ts reminders"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
