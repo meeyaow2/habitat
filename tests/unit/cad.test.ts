@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  angleDeg, clampOpening, isSimplePolygon, moveCorner, nearestWall, openingSpan, parseLength, pointAtLength, pointInPolygon,
+  angleDeg, clampOpening, detectRoomAt, isSimplePolygon, moveCorner, nearestWall, openingSpan, parseLength, pointAtLength, pointInPolygon,
   polygonArea, polygonCentroid, rectPolygon, snapPoint, toDxf, wallEndsAt, wallOutline, wallSegments, wallsFromPolygons,
   type Geometry, type Opening, type Wall,
 } from "@/features/home/cad";
@@ -145,5 +145,55 @@ describe("DXF export", () => {
     expect(dxf).toContain("6.0 m²");
     expect(dxf).toContain("3.00 m");
     expect(dxf).toContain("\r\n3000\r\n"); // 300 cm → 3000 mm
+  });
+});
+
+describe("room detection", () => {
+  const rect = (x: number, y: number, wd: number, h: number) => [wall(x, y, x + wd, y), wall(x + wd, y, x + wd, y + h), wall(x + wd, y + h, x, y + h), wall(x, y + h, x, y)];
+  const area = (pts: { x: number; y: number }[] | null) => (pts ? polygonArea(pts) : null);
+
+  it("finds a closed rectangle drawn as four walls", () => {
+    const r = detectRoomAt(rect(0, 0, 400, 300), { x: 100, y: 100 });
+    expect(r).toHaveLength(4);
+    expect(area(r)).toBe(120000);
+  });
+
+  it("returns null outside the walls or when the outline is open", () => {
+    const walls = rect(0, 0, 400, 300);
+    expect(detectRoomAt(walls, { x: 500, y: 100 })).toBeNull();
+    expect(detectRoomAt(walls.slice(0, 3), { x: 100, y: 100 })).toBeNull();
+  });
+
+  it("splits rooms at a shared wall drawn as a T-junction", () => {
+    const walls = [...rect(0, 0, 600, 300), wall(250, 0, 250, 300)];
+    expect(area(detectRoomAt(walls, { x: 100, y: 100 }))).toBe(75000);
+    expect(area(detectRoomAt(walls, { x: 400, y: 100 }))).toBe(105000);
+  });
+
+  it("handles an L-shaped outline and one long wall spanning two rooms", () => {
+    const L = [wall(0, 0, 500, 0), wall(500, 0, 500, 200), wall(500, 200, 200, 200), wall(200, 200, 200, 400), wall(200, 400, 0, 400), wall(0, 400, 0, 0)];
+    const r = detectRoomAt(L, { x: 100, y: 300 });
+    expect(r).toHaveLength(6);
+    expect(area(r)).toBe(500 * 200 + 200 * 200);
+  });
+
+  it("splits walls where they cross and ignores stub walls", () => {
+    const walls = [...rect(0, 0, 400, 400), wall(-50, 200, 450, 200), wall(100, 0, 100, 80)];
+    const r = detectRoomAt(walls, { x: 300, y: 300 });
+    expect(area(r)).toBe(400 * 200);
+    // The stub from the top wall doesn't cut the top room.
+    expect(area(detectRoomAt(walls, { x: 300, y: 50 }))).toBe(400 * 200);
+  });
+
+  it("tolerates a wall that stops inside another wall's thickness", () => {
+    const walls = [...rect(0, 0, 400, 300).slice(0, 3), wall(4, 300, 4, 0)];
+    // Left wall is 4 cm off the corners but within the top/bottom walls' 5 cm half-thickness.
+    const r = detectRoomAt(walls, { x: 100, y: 100 });
+    expect(r).not.toBeNull();
+    expect(area(r)).toBeCloseTo(396 * 300, -2);
+  });
+
+  it("ignores slivers smaller than the minimum area", () => {
+    expect(detectRoomAt(rect(0, 0, 50, 50), { x: 25, y: 25 })).toBeNull();
   });
 });

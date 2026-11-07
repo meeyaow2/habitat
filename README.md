@@ -11,7 +11,7 @@ Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` d
 | Sign up / sign in (local auth, or Supabase Auth when configured) | ✅ |
 | Guided onboarding (home → layout template → first appliance → explore), progress persisted | ✅ |
 | Overview dashboard from real records, every metric links to a filtered view | ✅ |
-| **CAD-style drafting**: wall tool with typed lengths (3.2, 320cm, 3m20), object snaps (endpoint, midpoint, on-wall, tracking), ortho (F8), grid (F7), snap (F3), joined corners, T-junctions, doors/windows/openings in walls, polygon rooms with live area, dimensions, text, measure, command line + X/Y readout, layers | ✅ |
+| **CAD-style drafting**: wall tool with typed lengths (3.2, 320cm, 3m20), object snaps (endpoint, midpoint, on-wall, tracking), ortho (F8), grid (F7), snap (F3), joined corners, T-junctions, doors/windows/openings in walls, polygon rooms with live area, fill room (click inside closed walls to create the room), dimensions, text, measure, command line + X/Y readout, layers | ✅ |
 | Live 3D view from the same drawing (real door/window openings, cutaway), side-by-side with 2D | ✅ |
 | Multiple levels; export DXF (AutoCAD, mm) and PNG | ✅ |
 | Starter templates converted to editable walls; "Draw it yourself" is the default | ✅ |

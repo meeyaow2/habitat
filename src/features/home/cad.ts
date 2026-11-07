@@ -555,3 +555,158 @@ export function setWallLength(g: Geometry, wallId: string, length: number): Geom
   if (!w || length < 1) return g;
   return moveCorner(g, w.b, add(w.a, mul(wallDir(w), length)));
 }
+
+// ---------------------------------------------------------------------------
+// Room detection ("boundary pick"): find the enclosed region around a point
+// ---------------------------------------------------------------------------
+const signedArea = (pts: Pt[]) => {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % pts.length];
+    s += p.x * q.y - q.x * p.y;
+  }
+  return s / 2;
+};
+
+/** Drop vertices that sit on a straight line between their neighbours. */
+function simplifyPolygon(pts: Pt[]) {
+  let out = pts;
+  for (let changed = true; changed && out.length > 3; ) {
+    changed = false;
+    for (let i = 0; i < out.length; i++) {
+      const p = out[(i - 1 + out.length) % out.length];
+      const q = out[i];
+      const r = out[(i + 1) % out.length];
+      const l = dist(p, r);
+      if (samePt(p, q, 0.05) || (l > 0 && Math.abs(cross(sub(q, p), sub(r, p))) / l < 0.5 && dot(sub(q, p), sub(r, q)) >= 0)) {
+        out = out.filter((_, j) => j !== i);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Split wall centrelines at every crossing, T-junction and shared corner, and
+ * return the resulting planar graph. Ends that stop inside another wall's
+ * thickness (a common drafting slip) are treated as touching it.
+ */
+function wallGraph(walls: Wall[], tol = 1.5) {
+  const segs = walls.filter((w) => wallLength(w) > tol);
+  const cuts: number[][] = segs.map(() => [0, 1]);
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    const d = sub(s.b, s.a);
+    const L = len(d);
+    for (let j = 0; j < segs.length; j++) {
+      if (i === j) continue;
+      const o = segs[j];
+      // Another wall's end lying on (or within half this wall's thickness of) this wall.
+      for (const end of [o.a, o.b]) {
+        const pr = projectOnSegment(end, s.a, s.b);
+        if (pr.dist <= Math.max(tol, s.thickness / 2) && pr.t * L > tol && (1 - pr.t) * L > tol) cuts[i].push(pr.t);
+      }
+      // Proper crossing.
+      if (j > i) {
+        const e = sub(o.b, o.a);
+        const den = cross(d, e);
+        if (Math.abs(den) < 1e-9) continue;
+        const t = cross(sub(o.a, s.a), e) / den;
+        const u = cross(sub(o.a, s.a), d) / den;
+        if (t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6) {
+          cuts[i].push(t);
+          cuts[j].push(u);
+        }
+      }
+    }
+  }
+
+  const verts: Pt[] = [];
+  const vertexAt = (p: Pt) => {
+    const k = verts.findIndex((v) => dist(v, p) <= tol);
+    if (k >= 0) return k;
+    verts.push(p);
+    return verts.length - 1;
+  };
+  const edges = new Map<string, [number, number]>();
+  segs.forEach((s, i) => {
+    const ts = [...new Set(cuts[i])].sort((a, b) => a - b);
+    const ids = ts.map((t) => vertexAt(lerp(s.a, s.b, t)));
+    for (let k = 0; k < ids.length - 1; k++) {
+      const a = ids[k], b = ids[k + 1];
+      if (a === b) continue;
+      edges.set(a < b ? `${a}:${b}` : `${b}:${a}`, a < b ? [a, b] : [b, a]);
+    }
+  });
+
+  // Prune dead ends (stub walls) repeatedly: they cannot bound a room.
+  const adj = verts.map(() => new Set<number>());
+  for (const [a, b] of edges.values()) {
+    adj[a].add(b);
+    adj[b].add(a);
+  }
+  const stack = adj.flatMap((s, i) => (s.size === 1 ? [i] : []));
+  while (stack.length) {
+    const v = stack.pop()!;
+    for (const w of adj[v]) {
+      adj[w].delete(v);
+      if (adj[w].size === 1) stack.push(w);
+    }
+    adj[v].clear();
+  }
+  return { verts, adj };
+}
+
+export type Region = { pts: Pt[]; area: number };
+
+/**
+ * Every region fully enclosed by walls (along their centrelines), smallest
+ * first. Regions under `minArea` (default 0.5 m²) are dropped as slivers.
+ */
+export function enclosedRegions(walls: Wall[], minArea = 5000): Region[] {
+  const { verts, adj } = wallGraph(walls);
+  const order = adj.map((s, v) =>
+    [...s].sort((a, b) => Math.atan2(verts[a].y - verts[v].y, verts[a].x - verts[v].x) - Math.atan2(verts[b].y - verts[v].y, verts[b].x - verts[v].x)),
+  );
+  const seen = new Set<string>();
+  const out: Region[] = [];
+  for (let u = 0; u < verts.length; u++)
+    for (const v0 of order[u]) {
+      if (seen.has(`${u}>${v0}`)) continue;
+      // Walk one face: at each vertex turn onto the next edge clockwise from the one we arrived on.
+      const face: number[] = [];
+      let a = u, b = v0;
+      for (let guard = 0; guard <= 4 * verts.length && !seen.has(`${a}>${b}`); guard++) {
+        seen.add(`${a}>${b}`);
+        face.push(a);
+        const around = order[b];
+        const i = around.indexOf(a);
+        const next = around[(i - 1 + around.length) % around.length];
+        a = b;
+        b = next;
+      }
+      const raw = face.map((k) => verts[k]);
+      // Bounded faces come out with positive signed area in this traversal (y down); outer faces are negative.
+      const area = signedArea(raw);
+      if (area <= minArea) continue;
+      const pts = simplifyPolygon(raw.map(roundPt));
+      if (pts.length >= 3) out.push({ pts, area });
+    }
+  return out.sort((x, y) => x.area - y.area);
+}
+
+/** The smallest region in `regions` (sorted smallest first) that contains `p`. */
+export function regionAt(regions: Region[], p: Pt): Region | null {
+  return regions.find((r) => pointInPolygon(p, r.pts)) ?? null;
+}
+
+/**
+ * The smallest region enclosed by walls that contains `p`, as a polygon along
+ * the wall centrelines, or null when the walls around `p` don't close.
+ */
+export function detectRoomAt(walls: Wall[], p: Pt, opts: { minArea?: number } = {}): Pt[] | null {
+  return regionAt(enclosedRegions(walls, opts.minArea), p)?.pts ?? null;
+}

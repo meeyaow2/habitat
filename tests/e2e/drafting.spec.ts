@@ -4,7 +4,8 @@ import { signUpWithHome, uid } from "./helpers";
 
 /**
  * CAD-style drafting: a person draws their own home from scratch on a new
- * level — walls by typed lengths, a door and a window, a room, a dimension —
+ * level — walls by typed lengths, a door and a window, a room found from the
+ * walls, a dimension —
  * saves, reloads, sees it in 3D and exports DXF.
  */
 type V = { scale: number; x: number; y: number };
@@ -63,16 +64,21 @@ test("draw a room from scratch with walls, a door, a window and a dimension", as
   await page.mouse.click(p.x, p.y);
   await expect(page.getByRole("heading", { name: "Window" })).toBeVisible();
 
-  // Room by snapping to the corners
+  // Room by clicking inside the closed walls (boundary detection)
+  await expect(page.getByText("Walls closed?")).toBeVisible();
   await canvas.focus();
-  await page.keyboard.press("r");
-  for (const [dx, dy] of [[0, 0], [400, 0], [400, 300], [0, 300], [0, 0]]) {
-    const c = await toScreen(page, { x: origin.x + dx, y: origin.y + dy });
-    await page.mouse.move(c.x + 2, c.y + 2, { steps: 2 });
-    await page.mouse.click(c.x + 2, c.y + 2);
-  }
+  await page.keyboard.press("f");
+  await expect(page.getByText(/FILL ROOM\s+Click inside closed walls/)).toBeVisible();
+  const outside = await toScreen(page, { x: origin.x + 600, y: origin.y + 150 });
+  await page.mouse.click(outside.x, outside.y);
+  await expect(page.getByText("No closed boundary here")).toBeVisible();
+  const inside = await toScreen(page, { x: origin.x + 150, y: origin.y + 120 });
+  await page.mouse.move(inside.x, inside.y, { steps: 2 });
+  await page.mouse.click(inside.x, inside.y);
   await expect(page.getByRole("heading", { name: "Room" })).toBeVisible();
   await expect(page.getByText("12.0 m²").first()).toBeVisible();
+  await page.mouse.click(inside.x + 20, inside.y + 20);
+  await expect(page.getByText("Room 1 is already here")).toBeVisible();
 
   // Dimension along the top wall
   await canvas.focus();

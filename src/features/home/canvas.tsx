@@ -3,10 +3,11 @@
 import Konva from "konva";
 import * as React from "react";
 import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text } from "react-konva";
+import { toast } from "sonner";
 import { category } from "@/lib/domain/categories";
 import {
-  add, angleDeg, clampOpening, DEFAULTS, dist, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
-  openingSpan, perp, pointAtLength, polygonArea, polygonCentroid, roundPt, samePt, snapPoint, splitWallAt,
+  add, angleDeg, clampOpening, DEFAULTS, dist, enclosedRegions, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
+  openingSpan, perp, pointAtLength, pointInPolygon, polygonArea, polygonCentroid, regionAt, roundPt, samePt, snapPoint, splitWallAt,
   sub, unit, wallDir, wallLength, wallSegments,
   type Geometry, type Opening, type OpeningKind, type Pt, type SnapResult, type Wall,
 } from "./cad";
@@ -17,7 +18,7 @@ import { iconImage } from "./icon-images";
 Konva.dragDistance = 4;
 Konva.hitOnDragEnabled = true;
 
-export type Tool = "select" | "pan" | "wall" | "room" | "door" | "window" | "opening" | "dimension" | "text" | "measure";
+export type Tool = "select" | "pan" | "wall" | "room" | "fill" | "door" | "window" | "opening" | "dimension" | "text" | "measure";
 export type SelectionKind = "room" | "object" | "wall" | "opening" | "dimension" | "label";
 export type Selection = { kind: SelectionKind; id: string } | null;
 export type MarkerTone = "neutral" | "warning" | "danger";
@@ -68,9 +69,10 @@ const clampScale = (s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 const FONT = "Instrument Sans, system-ui, sans-serif";
 
 const PROMPTS: Record<Tool, [string, string?]> = {
-  select: ["Select an object to edit it · drag empty space to pan · W wall · R room · D door · N window · M dimension · T text"],
+  select: ["Select an object to edit it · drag empty space to pan · W wall · R room · F fill room · D door · N window · M dimension · T text"],
   pan: ["Drag to pan · scroll or pinch to zoom"],
   wall: ["WALL  Specify start point", "WALL  Specify next point or type a length, then Enter · Enter/Esc to finish · Backspace removes the last wall"],
+  fill: ["FILL ROOM  Click inside closed walls to make a room · click an existing room to fit it to its walls"],
   room: ["ROOM  Click the first corner", "ROOM  Click the next corner or type a length · click the first point or press Enter to close"],
   door: ["DOOR  Click a wall to place a door"],
   window: ["WINDOW  Click a wall to place a window"],
@@ -105,6 +107,8 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const pinch = React.useRef<{ dist: number; centre: Pt } | null>(null);
 
   const drawing = editable && tool !== "select" && tool !== "pan";
+  // Enclosed regions for the fill tool, recomputed only when walls change.
+  const regions = React.useMemo(() => (editable && tool === "fill" ? enclosedRegions(g.walls) : []), [editable, tool, g.walls]);
   const geo = preview ?? g;
   const L = settings.layers;
   const s = view.scale;
@@ -238,6 +242,28 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     onSelect({ kind: "room", id: room.id });
   };
 
+  /** Fill tool: turn the walled region under the cursor into a room, or refit the room already there. */
+  const fillAt = (p: Pt) => {
+    const region = regionAt(regions, p);
+    const existing = [...doc.rooms].reverse().find((r) => pointInPolygon(p, roomPolygon(r)));
+    if (existing) {
+      onSelect({ kind: "room", id: existing.id });
+      const cur = roomPolygon(existing);
+      const same = region && region.pts.length === cur.length && region.pts.every((q) => cur.some((c) => samePt(c, q, 1)));
+      const ratio = region ? region.area / Math.max(polygonArea(cur), 1) : 0;
+      if (region && !same && ratio > 0.5 && ratio < 2) {
+        onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === existing.id ? withPolygon(r, region.pts) : r)) });
+        toast.success(`${existing.name} now follows its walls`, { description: `${formatArea(region.area)} · Ctrl+Z to undo` });
+      } else toast(`${existing.name} is already here`, { description: "It’s selected. Switch to Select (V) to edit it." });
+      return;
+    }
+    if (!region) {
+      toast.error("No closed boundary here", { description: "Walls need to go all the way round the space. Close any gaps, then click inside." });
+      return;
+    }
+    closeRoom(region.pts);
+  };
+
   const placePoint = (p: Pt, snap: SnapResult | null) => {
     if (tool === "wall") {
       if (draft.length === 0) return setDraft([p]);
@@ -317,7 +343,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     }
     let from: Pt | null = draft.length ? draft[draft.length - 1] : null;
     if (tool === "dimension" && dimOffsetStage) from = null;
-    const snap = tool === "door" || tool === "window" || tool === "opening" ? { point: p, kind: "none" as const, guides: [] } : snapPoint(p, snapCtx(from));
+    const snap = tool === "door" || tool === "window" || tool === "opening" || tool === "fill" ? { point: p, kind: "none" as const, guides: [] } : snapPoint(p, snapCtx(from));
     setCursor(snap);
     props.onCursor(snap.point, snap.kind);
   };
@@ -328,6 +354,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
       const p = worldPointer(e.evt);
       if (!p) return;
       if (tool === "door" || tool === "window" || tool === "opening") return void placeOpening(tool, p);
+      if (tool === "fill") return fillAt(p);
       if (tool === "text") return props.onRequestText(roundPt(snapPoint(p, snapCtx(null)).point));
       if (tool === "dimension" && dimOffsetStage && draft.length === 2) {
         const [a, b] = draft;
@@ -679,6 +706,14 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
       nodes.push(<LengthTag key="dt" a={last} b={p} offset={px(18)} px={px} text={formatLength(dist(last, p), { precise: true })} />);
       if (draft.length >= 3) nodes.push(<Circle key="close" x={draft[0].x} y={draft[0].y} radius={px(8)} stroke={PLAN.accent} strokeWidth={px(2)} listening={false} />);
       if (draft.length >= 2) nodes.push(<Text key="ar" x={p.x + px(14)} y={p.y + px(10)} text={formatArea(polygonArea(pts))} fontSize={px(11)} fill={PLAN.accent} fontStyle="600" fontFamily={FONT} listening={false} />);
+    }
+    if (tool === "fill") {
+      const r = regionAt(regions, p);
+      if (r) {
+        const c = polygonCentroid(r.pts);
+        nodes.push(<Line key="fr" points={r.pts.flatMap((q) => [q.x, q.y])} closed fill="rgba(66,99,79,0.16)" stroke={PLAN.accent} strokeWidth={px(2)} dash={[px(6), px(4)]} listening={false} />);
+        nodes.push(<Text key="fa" x={c.x - px(60)} y={c.y - px(7)} width={px(120)} align="center" text={formatArea(r.area)} fontSize={px(13)} fill={PLAN.accent} fontStyle="600" fontFamily={FONT} listening={false} />);
+      }
     }
     if (tool === "dimension" && dimOffsetStage && draft.length === 2) {
       const [a, b] = draft;

@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { toast } from "sonner";
 import {
-  Box, Columns2, DoorOpen, Download, Eye, Hand, Info, Layers as LayersIcon, Maximize, MousePointer2, MoreHorizontal, PanelsTopLeft, Pencil, Plus,
+  Box, Columns2, DoorOpen, PaintBucket, Download, Eye, Hand, Info, Layers as LayersIcon, Maximize, MousePointer2, MoreHorizontal, PanelsTopLeft, Pencil, Plus,
   Redo2, RotateCcw, Ruler, RulerDimensionLine, Square, SquareDashed, Type, Undo2, ZoomIn, ZoomOut, AppWindow, Trash2,
 } from "lucide-react";
 import { CategoryIcon } from "@/components/category-icon";
@@ -62,6 +62,7 @@ const TOOLS: { tool: Tool; label: string; key: string; icon: React.ReactNode }[]
   { tool: "pan", label: "Pan", key: "H", icon: <Hand /> },
   { tool: "wall", label: "Wall", key: "W", icon: <PanelsTopLeft /> },
   { tool: "room", label: "Room", key: "R", icon: <SquareDashed /> },
+  { tool: "fill", label: "Fill room inside walls", key: "F", icon: <PaintBucket /> },
   { tool: "door", label: "Door", key: "D", icon: <DoorOpen /> },
   { tool: "window", label: "Window", key: "N", icon: <AppWindow /> },
   { tool: "opening", label: "Opening", key: "O", icon: <Square /> },
@@ -375,7 +376,8 @@ export function HomeTwin(props: TwinProps) {
       setCommand("");
       return;
     }
-    const t = KEY_TO_TOOL[v.toLowerCase()] ?? (TOOLS.find((x) => x.label.toLowerCase() === v.toLowerCase())?.tool);
+    const word = v.toLowerCase();
+    const t = KEY_TO_TOOL[word] ?? TOOLS.find((x) => x.tool === word || x.label.toLowerCase() === word)?.tool;
     if (t) {
       setTool(t);
       setCommand("");
@@ -450,6 +452,7 @@ export function HomeTwin(props: TwinProps) {
   }));
   const issues = props.assets.filter((a) => a.tone !== "neutral" && placedHere.has(a.id));
   const emptyDrawing = doc.rooms.length === 0 && g.walls.length === 0;
+  const wallsWithoutRooms = doc.rooms.length === 0 && g.walls.length >= 3;
   const show2d = viewKind !== "3d";
   const show3d = viewKind !== "2d";
 
@@ -585,6 +588,13 @@ export function HomeTwin(props: TwinProps) {
                   <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center" role="note">
                     <p className="max-w-xl rounded-md border border-line bg-surface/95 px-3 py-2 text-center text-sm text-fg-muted shadow-sm">
                       <strong className="text-fg">Draw your home:</strong> press <kbd className="rounded-xs border border-line px-1 font-mono text-xs">W</kbd>, click to start a wall, move the mouse, type a length like <kbd className="rounded-xs border border-line px-1 font-mono text-xs">3.2</kbd> and press Enter. Click your first point to close the shape.
+                    </p>
+                  </div>
+                )}
+                {wallsWithoutRooms && mode === "edit" && tool !== "fill" && tool !== "room" && (
+                  <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center" role="note">
+                    <p className="max-w-xl rounded-md border border-line bg-surface/95 px-3 py-2 text-center text-sm text-fg-muted shadow-sm">
+                      <strong className="text-fg">Walls closed?</strong> Press <kbd className="rounded-xs border border-line px-1 font-mono text-xs">F</kbd> and click inside them to make a room with its area worked out.
                     </p>
                   </div>
                 )}
