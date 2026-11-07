@@ -5,7 +5,7 @@ import * as React from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Segmented } from "@/components/ui/segmented";
-import { add, mul, openingSpan, wallDir, wallSegments, wallsFromPolygons, type Pt, type Wall } from "./cad";
+import { add, dist, doorSymbol, lerp, mul, wallDir, wallSegments, wallsFromPolygons, type Pt, type Wall } from "./cad";
 import { boundsOf, centre, newId, objectBounds, roomPolygon, type FloorDoc } from "./model";
 import { FURNITURE_FILL, PLAN, ROOM_FILL } from "./palette";
 
@@ -117,23 +117,26 @@ export function Viewer3D({ doc, wallHeight, pins, onOpenAsset }: { doc: FloorDoc
           </group>
         ))}
 
-        {/* Door leaves (open 90°) so doors read clearly */}
+        {/* Door leaves (open 90°) and sliding panels, from the same symbol as the plan */}
         {openings.filter((o) => o.kind === "door").map((o) => {
           const w = walls.find((x) => x.id === o.wallId);
           if (!w) return null;
-          const { start, end } = openingSpan(w, o);
-          const hinge = o.hingeEnd ? end : start;
-          const d = wallDir(w);
-          const n = { x: -d.y * (o.flip ? -1 : 1), y: d.x * (o.flip ? -1 : 1) };
-          const tip = add(hinge, mul(n, -o.width));
-          const mid = { x: (hinge.x + tip.x) / 2, y: (hinge.y + tip.y) / 2 };
-          const angle = -Math.atan2(tip.y - hinge.y, tip.x - hinge.x);
+          const sym = doorSymbol(w, o);
           const h = Math.min(o.height, H);
+          const slab = (a: Pt, b: Pt, depth: number, key: string) => {
+            const mid = lerp(a, b, 0.5);
+            return (
+              <mesh key={key} position={[m(mid.x), m(h / 2), m(mid.y)]} rotation={[0, -Math.atan2(b.y - a.y, b.x - a.x), 0]} castShadow>
+                <boxGeometry args={[m(dist(a, b)), m(h), depth]} />
+                <meshStandardMaterial color="#c9b79c" />
+              </mesh>
+            );
+          };
           return (
-            <mesh key={`leaf-${o.id}`} position={[m(mid.x), m(h / 2), m(mid.y)]} rotation={[0, angle, 0]} castShadow>
-              <boxGeometry args={[m(o.width), m(h), 0.04]} />
-              <meshStandardMaterial color="#c9b79c" />
-            </mesh>
+            <group key={`door-${o.id}`}>
+              {sym.leaves.map((lf, i) => slab(lf.hinge, lf.tip, 0.04, `l${i}`))}
+              {sym.panels.filter((pn) => !pn.hidden).map((pn, i) => slab(lerp(pn.pts[0], pn.pts[3], 0.5), lerp(pn.pts[1], pn.pts[2], 0.5), Math.max(0.02, m(dist(pn.pts[0], pn.pts[3]))), `p${i}`))}
+            </group>
           );
         })}
 

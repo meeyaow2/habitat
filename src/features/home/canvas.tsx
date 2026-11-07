@@ -6,7 +6,7 @@ import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text }
 import { toast } from "sonner";
 import { category } from "@/lib/domain/categories";
 import {
-  add, angleDeg, clampOpening, DEFAULTS, dist, enclosedRegions, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
+  add, angleDeg, clampOpening, DEFAULTS, dist, doorSymbol, dot, enclosedRegions, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
   openingSpan, perp, pointAtLength, pointInPolygon, polygonArea, polygonCentroid, regionAt, roundPt, samePt, snapPoint, splitWallAt,
   sub, unit, wallDir, wallLength, wallSegments,
   type Geometry, type Opening, type OpeningKind, type Pt, type SnapResult, type Wall,
@@ -225,7 +225,20 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     const hit = nearestWall(g.walls, p, px(24) + 20);
     if (!hit) return false;
     const d = DEFAULTS[kind];
-    const o: Opening = { id: newId(), wallId: hit.wall.id, kind, offset: hit.offset, width: d.width, flip: false, hingeEnd: false, height: d.height, sill: d.sill };
+    // Doors swing into the room: probe both sides of the wall for an enclosed space.
+    // Between two rooms (or with none) they swing to the side that was clicked.
+    let flip = false;
+    if (kind === "door") {
+      const n = perp(wallDir(hit.wall));
+      const at = add(hit.wall.a, mul(wallDir(hit.wall), hit.offset));
+      const probe = (k: number) => add(at, mul(n, k * (hit.wall.thickness / 2 + 30)));
+      let regions: ReturnType<typeof enclosedRegions> | null = null;
+      const enclosed = (q: Pt) => doc.rooms.some((r) => pointInPolygon(q, roomPolygon(r))) || !!regionAt((regions ??= enclosedRegions(g.walls)), q);
+      // flip=false puts the leaf on the -n side.
+      const neg = enclosed(probe(-1)), pos = enclosed(probe(1));
+      flip = neg === pos ? dot(sub(p, at), n) > 0 : pos;
+    }
+    const o: Opening = { id: newId(), wallId: hit.wall.id, kind, offset: hit.offset, width: d.width, flip, hingeEnd: false, height: d.height, sill: d.sill };
     const c = clampOpening(hit.wall, o);
     commitGeometry({ ...g, openings: [...g.openings, { ...o, ...c }] });
     onSelect({ kind: "opening", id: o.id });
@@ -508,8 +521,6 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     if (!w) return null;
     const { start, end } = openingSpan(w, o);
     const d = wallDir(w);
-    const side = o.flip ? -1 : 1;
-    const nrm = mul(perp(d), side);
     const half = w.thickness / 2;
     const sel = isSel("opening", o.id);
     const col = sel ? PLAN.accent : PLAN.wall;
@@ -523,29 +534,44 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           </>
         )}
         {o.kind === "door" && (() => {
-          const hinge = o.hingeEnd ? end : start;
-          const closed = o.hingeEnd ? start : end;
-          const tip = add(hinge, mul(nrm, -o.width));
+          const sym = doorSymbol(w, o);
+          const jamb = (p: Pt, k: string) => <Line key={k} points={[...flat(add(p, mul(perp(d), half))), ...flat(sub(p, mul(perp(d), half)))]} stroke={col} strokeWidth={px(1.5)} listening={false} />;
           return (
             <>
-              <Line points={[...flat(add(hinge, mul(perp(d), half))), ...flat(sub(hinge, mul(perp(d), half)))]} stroke={col} strokeWidth={px(1.5)} listening={false} />
-              <Line points={[...flat(hinge), ...flat(tip)]} stroke={col} strokeWidth={px(2)} listening={false} />
-              <Shape
-                listening={false}
-                stroke={col}
-                strokeWidth={px(1)}
-                dash={[px(4), px(3)]}
-                sceneFunc={(ctx, shape) => {
-                  const a0 = Math.atan2(closed.y - hinge.y, closed.x - hinge.x);
-                  const a1 = Math.atan2(tip.y - hinge.y, tip.x - hinge.x);
-                  let delta = a1 - a0;
-                  while (delta > Math.PI) delta -= 2 * Math.PI;
-                  while (delta < -Math.PI) delta += 2 * Math.PI;
-                  ctx.beginPath();
-                  ctx.arc(hinge.x, hinge.y, o.width, a0, a1, delta < 0);
-                  ctx.strokeShape(shape);
-                }}
-              />
+              {sym.leaves.length === 1 ? jamb(sym.leaves[0].hinge, "j") : [jamb(start, "j0"), jamb(end, "j1")]}
+              {sym.leaves.map((lf, i) => (
+                <React.Fragment key={`l${i}`}>
+                  <Line points={[...flat(lf.hinge), ...flat(lf.tip)]} stroke={col} strokeWidth={px(2)} listening={false} />
+                  <Shape
+                    listening={false}
+                    stroke={col}
+                    strokeWidth={px(1)}
+                    dash={[px(4), px(3)]}
+                    sceneFunc={(ctx, shape) => {
+                      const a0 = Math.atan2(lf.closed.y - lf.hinge.y, lf.closed.x - lf.hinge.x);
+                      const a1 = Math.atan2(lf.tip.y - lf.hinge.y, lf.tip.x - lf.hinge.x);
+                      let delta = a1 - a0;
+                      while (delta > Math.PI) delta -= 2 * Math.PI;
+                      while (delta < -Math.PI) delta += 2 * Math.PI;
+                      ctx.beginPath();
+                      ctx.arc(lf.hinge.x, lf.hinge.y, lf.radius, a0, a1, delta < 0);
+                      ctx.strokeShape(shape);
+                    }}
+                  />
+                </React.Fragment>
+              ))}
+              {sym.panels.map((pn, i) => (
+                <Line
+                  key={`p${i}`}
+                  points={pn.pts.flatMap((q) => [q.x, q.y])}
+                  closed
+                  fill="#ffffff"
+                  stroke={col}
+                  strokeWidth={px(pn.hidden ? 1 : 1.5)}
+                  dash={pn.hidden ? [px(4), px(3)] : undefined}
+                  listening={false}
+                />
+              ))}
             </>
           );
         })()}

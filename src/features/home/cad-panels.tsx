@@ -8,7 +8,7 @@ import { NativeSelect } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   angleDeg, clampOpening, formatArea, formatLength, parseLength, polygonArea, reclampOpenings, setWallLength, wallLength, wallsFromPolygons,
-  type Geometry, type OpeningKind,
+  DOOR_STYLE_LABELS, DOOR_STYLES, type DoorStyle, type Geometry, type OpeningKind,
 } from "./cad";
 import type { Layers, LayerKey, Selection } from "./canvas";
 import { CommitInput, NudgePad, PanelSection } from "./edit-panels";
@@ -97,6 +97,7 @@ export function CadProperties({
     const update = (patch: Partial<typeof o>) =>
       setG({ ...g, openings: reclampOpenings(g.walls, g.openings.map((x) => (x.id === o.id ? { ...x, ...patch } : x))) });
     const fromStart = o.offset - o.width / 2;
+    const style: DoorStyle = o.style ?? "single";
     return (
       <PanelSection title={o.kind === "door" ? "Door" : o.kind === "window" ? "Window" : "Opening"}>
         <div className="flex flex-col gap-3">
@@ -118,10 +119,31 @@ export function CadProperties({
             {o.kind === "window" && <CommitInput id="op-sill" label="Sill height" value={String(o.sill)} suffix="cm" onCommit={(v) => { const x = cm(v); if (x !== null && x <= 500) update({ sill: x }); }} />}
           </div>
           {o.kind === "door" && (
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="secondary" onClick={() => update({ flip: !o.flip })}><FlipHorizontal2 aria-hidden /> Flip swing</Button>
-              <Button size="sm" variant="secondary" onClick={() => update({ hingeEnd: !o.hingeEnd })}><ArrowLeftRight aria-hidden /> Hinge side</Button>
-            </div>
+            <>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="op-style" className="text-xs font-medium text-fg-muted">Door style</label>
+                <NativeSelect id="op-style" value={style} onChange={(e) => {
+                  const style = e.target.value as DoorStyle;
+                  // A double or sliding door is usually wider; widen a default-width door to suit.
+                  const width = (style === "double" || style === "sliding") && o.width < 120 ? 150 : o.width;
+                  update({ style, ...clampOpening(w, { offset: o.offset, width }) });
+                }}>
+                  {DOOR_STYLES.map((st) => <option key={st} value={st}>{DOOR_STYLE_LABELS[st]}</option>)}
+                </NativeSelect>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {style !== "pocket" && (
+                  <Button size="sm" variant="secondary" onClick={() => update({ flip: !o.flip })}>
+                    <FlipHorizontal2 aria-hidden /> {style === "sliding" ? "Swap panels" : "Flip swing"}
+                  </Button>
+                )}
+                {(style === "single" || style === "pocket") && (
+                  <Button size="sm" variant="secondary" onClick={() => update({ hingeEnd: !o.hingeEnd })}>
+                    <ArrowLeftRight aria-hidden /> {style === "single" ? "Hinge side" : "Pocket side"}
+                  </Button>
+                )}
+              </div>
+            </>
           )}
           <p className="text-xs text-fg-muted">Drag it along the wall to reposition.</p>
           <div><Button size="sm" variant="danger-ghost" onClick={onDelete}><Trash2 aria-hidden /> Delete</Button></div>

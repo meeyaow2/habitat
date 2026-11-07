@@ -8,6 +8,7 @@ import { UserFacingError } from "@/lib/server/errors";
 import { id } from "@/lib/validation/schemas";
 import { getAsset } from "@/features/assets/queries";
 import { applyTemplate, getPrimaryProperty, saveFloorDoc } from "./server";
+import { DOOR_STYLES } from "./cad";
 import { getTemplate, type TemplateKey } from "./templates";
 
 const coord = z.number().finite().min(-50_000).max(50_000);
@@ -51,6 +52,7 @@ const geometrySchema = z.object({
         width: size(30, 1000),
         flip: z.boolean(),
         hingeEnd: z.boolean(),
+        style: z.enum(DOOR_STYLES).optional(),
         height: size(30, 600),
         sill: z.number().finite().min(0).max(500),
       }),

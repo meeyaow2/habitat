@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  angleDeg, clampOpening, detectRoomAt, isSimplePolygon, moveCorner, nearestWall, openingSpan, parseLength, pointAtLength, pointInPolygon,
+  angleDeg, clampOpening, detectRoomAt, doorSymbol, isSimplePolygon, moveCorner, nearestWall, openingSpan, parseLength, pointAtLength, pointInPolygon,
   polygonArea, polygonCentroid, rectPolygon, snapPoint, toDxf, wallEndsAt, wallOutline, wallSegments, wallsFromPolygons,
   type Geometry, type Opening, type Wall,
 } from "@/features/home/cad";
@@ -195,5 +195,67 @@ describe("room detection", () => {
 
   it("ignores slivers smaller than the minimum area", () => {
     expect(detectRoomAt(rect(0, 0, 50, 50), { x: 25, y: 25 })).toBeNull();
+  });
+});
+
+describe("door styles", () => {
+  const w = wall(0, 0, 400, 0, 10);
+  const styled = (style: Opening["style"], width = 160) => ({ ...door(w, 200, width), style });
+
+  it("draws a single swing door as one leaf at the hinge, open 90°", () => {
+    const s = doorSymbol(w, door(w, 200, 90));
+    expect(s.leaves).toHaveLength(1);
+    expect(s.panels).toHaveLength(0);
+    const [lf] = s.leaves;
+    expect(lf.hinge).toEqual({ x: 155, y: 0 });
+    expect(lf.closed).toEqual({ x: 245, y: 0 });
+    expect(lf.radius).toBe(90);
+    expect(Math.abs(lf.tip.x - 155)).toBeLessThan(1e-9);
+    expect(Math.abs(lf.tip.y)).toBeCloseTo(90);
+  });
+
+  it("splits a double door into two half-width leaves meeting in the middle", () => {
+    const s = doorSymbol(w, styled("double"));
+    expect(s.leaves.map((l) => l.radius)).toEqual([80, 80]);
+    expect(s.leaves.map((l) => l.hinge.x)).toEqual([120, 280]);
+    expect(s.leaves.every((l) => l.closed.x === 200)).toBe(true);
+    // Both leaves swing to the same side.
+    expect(Math.sign(s.leaves[0].tip.y)).toBe(Math.sign(s.leaves[1].tip.y));
+  });
+
+  it("draws a sliding door as two overlapping panels on either side of the centreline", () => {
+    const s = doorSymbol(w, styled("sliding"));
+    expect(s.leaves).toHaveLength(0);
+    expect(s.panels).toHaveLength(2);
+    const ys = s.panels.map((p) => p.pts.reduce((t, q) => t + q.y, 0) / 4);
+    expect(Math.sign(ys[0])).toBe(-Math.sign(ys[1]));
+    const xs = s.panels.map((p) => [Math.min(...p.pts.map((q) => q.x)), Math.max(...p.pts.map((q) => q.x))]);
+    expect(xs[0][1]).toBeGreaterThan(xs[1][0]); // overlap at the middle
+    // Panels stay within the wall thickness.
+    expect(s.panels.flatMap((p) => p.pts).every((q) => Math.abs(q.y) <= 5)).toBe(true);
+  });
+
+  it("draws a pocket door as a hidden panel inside the wall, on the chosen side", () => {
+    const left = doorSymbol(w, styled("pocket", 80));
+    expect(left.panels).toHaveLength(1);
+    expect(left.panels[0].hidden).toBe(true);
+    expect(Math.max(...left.panels[0].pts.map((q) => q.x))).toBeCloseTo(160);
+    expect(Math.min(...left.panels[0].pts.map((q) => q.x))).toBeCloseTo(80);
+    const right = doorSymbol(w, { ...styled("pocket", 80), hingeEnd: true });
+    expect(Math.min(...right.panels[0].pts.map((q) => q.x))).toBeCloseTo(240);
+    // Not enough wall on the chosen side: the pocket moves to the side that fits.
+    const nearEnd = doorSymbol(w, { ...door(w, 340, 80), style: "pocket", hingeEnd: true });
+    expect(Math.max(...nearEnd.panels[0].pts.map((q) => q.x))).toBeCloseTo(300);
+  });
+
+  it("exports each style to DXF on the DOORS layer", () => {
+    const dxfFor = (o: Opening) => toDxf({ geometry: { walls: [w], openings: [o], dimensions: [], labels: [] }, rooms: [], furniture: [], appliances: [] });
+    const count = (dxf: string, kind: string) => dxf.match(new RegExp(`${kind}\\r\\n8\\r\\nDOORS`, "g"))?.length ?? 0;
+    const dbl = dxfFor(styled("double"));
+    expect(count(dbl, "ARC")).toBe(2);
+    expect(count(dbl, "LINE")).toBe(2);
+    const sliding = dxfFor(styled("sliding"));
+    expect(count(sliding, "ARC")).toBe(0);
+    expect(count(sliding, "LINE")).toBe(8);
   });
 });

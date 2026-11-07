@@ -7,6 +7,14 @@ export type Pt = { x: number; y: number };
 export type Wall = { id: string; a: Pt; b: Pt; thickness: number };
 
 export type OpeningKind = "door" | "window" | "opening";
+export const DOOR_STYLES = ["single", "double", "sliding", "pocket"] as const;
+export type DoorStyle = (typeof DOOR_STYLES)[number];
+export const DOOR_STYLE_LABELS: Record<DoorStyle, string> = {
+  single: "Single swing",
+  double: "Double swing",
+  sliding: "Sliding (bypass)",
+  pocket: "Pocket (slides into wall)",
+};
 export type Opening = {
   id: string;
   wallId: string;
@@ -16,8 +24,10 @@ export type Opening = {
   width: number;
   /** Door swings to the other side of the wall. */
   flip: boolean;
-  /** Door hinge at the end nearer `b` instead of `a`. */
+  /** Door hinge at the end nearer `b` instead of `a` (pocket doors: the side the pocket is on). */
   hingeEnd: boolean;
+  /** Doors only; missing means a single swing door. */
+  style?: DoorStyle;
   /** Height in cm (doors ~210, windows ~120). */
   height: number;
   /** Windows: height of the sill above the floor. */
@@ -426,6 +436,59 @@ export function wallsFromPolygons(polys: Pt[][], newId: () => string, opts = { i
   ];
 }
 
+export type DoorLeaf = { hinge: Pt; closed: Pt; tip: Pt; radius: number };
+export type DoorPanel = { pts: Pt[]; /** Inside the wall (pocket): draw hidden/dashed. */ hidden: boolean };
+
+/**
+ * Plan symbol for a door, shared by the 2D canvas, the 3D view and DXF export.
+ * Swing doors return leaves drawn open 90° with their swing arcs; sliding and
+ * pocket doors return thin panels in the wall.
+ */
+export function doorSymbol(w: Wall, o: Opening): { leaves: DoorLeaf[]; panels: DoorPanel[] } {
+  const { start, end } = openingSpan(w, o);
+  const d = wallDir(w);
+  const nrm = mul(perp(d), o.flip ? -1 : 1);
+  const width = dist(start, end);
+  const leaf = (hinge: Pt, closed: Pt, r: number): DoorLeaf => ({ hinge, closed, tip: add(hinge, mul(nrm, -r)), radius: r });
+  const panelT = Math.min(4, w.thickness / 3);
+  const panel = (a: Pt, b: Pt, shift: number, hidden = false): DoorPanel => {
+    const off = mul(nrm, shift);
+    const h = mul(nrm, panelT / 2);
+    return { hidden, pts: [add(add(a, off), h), add(add(b, off), h), sub(add(b, off), h), sub(add(a, off), h)] };
+  };
+  switch (o.style ?? "single") {
+    case "double": {
+      const mid = lerp(start, end, 0.5);
+      return { leaves: [leaf(start, mid, width / 2), leaf(end, mid, width / 2)], panels: [] };
+    }
+    case "sliding": {
+      // Two overlapping panels on either side of the centreline (bypass track).
+      const lap = Math.min(5, width * 0.05);
+      const mid = lerp(start, end, 0.5);
+      const shift = Math.min(w.thickness / 4, panelT);
+      return {
+        leaves: [],
+        panels: [panel(start, add(mid, mul(d, lap)), shift), panel(sub(mid, mul(d, lap)), end, -shift)],
+      };
+    }
+    case "pocket": {
+      // One panel shown inside the wall cavity beside the opening, on the chosen
+      // side if the wall is long enough there, otherwise on the side that fits.
+      const roomBefore = o.offset - width / 2;
+      const roomAfter = wallLength(w) - (o.offset + width / 2);
+      const fits = (after: boolean) => (after ? roomAfter : roomBefore) >= width - 0.5;
+      const towardsEnd = fits(o.hingeEnd) || !fits(!o.hingeEnd) ? o.hingeEnd : !o.hingeEnd;
+      const a = towardsEnd ? end : start;
+      const b = add(a, mul(d, towardsEnd ? width : -width));
+      return { leaves: [], panels: [panel(a, b, 0, true)] };
+    }
+    default: {
+      const hinge = o.hingeEnd ? end : start;
+      return { leaves: [leaf(hinge, o.hingeEnd ? start : end, width)], panels: [] };
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // DXF export (AutoCAD R12 ASCII; units: millimetres; y flipped to y-up)
 // ---------------------------------------------------------------------------
@@ -481,15 +544,16 @@ export function toDxf(input: DxfInput): string {
       line("WINDOWS", start, end);
       line("WINDOWS", sub(start, mul(n, w.thickness / 2)), sub(end, mul(n, w.thickness / 2)));
     } else if (o.kind === "door") {
-      const hinge = o.hingeEnd ? end : start;
-      const leafDir = mul(n, -1);
-      const tip = add(hinge, mul(leafDir, o.width));
-      line("DOORS", hinge, tip);
-      const a0 = angleDeg(hinge, o.hingeEnd ? start : end);
-      const a1 = angleDeg(hinge, tip);
-      // DXF arcs run counter-clockwise from start to end angle (y-up).
-      const ccw = ((a1 - a0 + 360) % 360) <= 180;
-      arc("DOORS", hinge, o.width, ccw ? a0 : a1, ccw ? a1 : a0);
+      const sym = doorSymbol(w, o);
+      for (const lf of sym.leaves) {
+        line("DOORS", lf.hinge, lf.tip);
+        const a0 = angleDeg(lf.hinge, lf.closed);
+        const a1 = angleDeg(lf.hinge, lf.tip);
+        // DXF arcs run counter-clockwise from start to end angle (y-up).
+        const ccw = ((a1 - a0 + 360) % 360) <= 180;
+        arc("DOORS", lf.hinge, lf.radius, ccw ? a0 : a1, ccw ? a1 : a0);
+      }
+      for (const pn of sym.panels) poly("DOORS", pn.pts);
     }
   }
   for (const r of input.rooms) {

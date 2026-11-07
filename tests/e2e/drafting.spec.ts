@@ -4,7 +4,7 @@ import { signUpWithHome, uid } from "./helpers";
 
 /**
  * CAD-style drafting: a person draws their own home from scratch on a new
- * level — walls by typed lengths, a door and a window, a room found from the
+ * level — walls by typed lengths, a double door and a window, a room found from the
  * walls, a dimension —
  * saves, reloads, sees it in 3D and exports DXF.
  */
@@ -58,6 +58,8 @@ test("draw a room from scratch with walls, a door, a window and a dimension", as
   let p = await toScreen(page, { x: origin.x + 200, y: origin.y });
   await page.mouse.click(p.x, p.y);
   await expect(page.getByRole("heading", { name: "Door" })).toBeVisible();
+  await page.getByLabel("Door style").selectOption("double");
+  await expect(page.getByLabel("Width", { exact: true })).toHaveValue("150");
   await canvas.focus();
   await page.keyboard.press("n");
   p = await toScreen(page, { x: origin.x + 400, y: origin.y + 150 });
@@ -112,7 +114,7 @@ test("draw a room from scratch with walls, a door, a window and a dimension", as
   expect(download.suggestedFilename()).toMatch(/studio\.dxf$/);
   expect(dxf).toContain("AC1009");
   expect(dxf.match(/LINE\r\n8\r\nWALLS/g)?.length ?? 0).toBeGreaterThanOrEqual(16);
-  expect(dxf).toContain("ARC\r\n8\r\nDOORS");
+  expect(dxf.match(/ARC\r\n8\r\nDOORS/g)?.length ?? 0).toBe(2); // double door: two leaves
   expect(dxf).toContain("4.00 m");
   void view;
 });
