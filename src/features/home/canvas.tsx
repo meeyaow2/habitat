@@ -2,16 +2,16 @@
 
 import Konva from "konva";
 import * as React from "react";
-import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text } from "react-konva";
+import { Circle, Group, Image as KImage, Layer, Line, Rect, Shape, Stage, Text, Transformer } from "react-konva";
 import { toast } from "sonner";
 import { category } from "@/lib/domain/categories";
 import {
-  add, angleDeg, clampOpening, DEFAULTS, dist, doorSymbol, dot, enclosedRegions, formatArea, formatLength, lerp, moveCorner, moveWall, mul, nearestWall,
-  openingSpan, perp, pointAtLength, pointInPolygon, polygonArea, polygonCentroid, regionAt, roundPt, samePt, snapPoint, splitWallAt,
+  add, angleDeg, clampOpening, DEFAULTS, dist, doorSymbol, dot, enclosedRegions, formatArea, formatLength, lerp, mul, nearestWall,
+  openingConflicts, openingSpan, perp, pointAtLength, pointInPolygon, polygonArea, polygonCentroid, regionAt, roundPt, samePt, snapPoint, splitWallAt,
   sub, unit, wallDir, wallLength, wallSegments,
   type Geometry, type Opening, type OpeningKind, type Pt, type SnapResult, type Wall,
 } from "./cad";
-import { docBounds, newId, objectBounds, roomPolygon, withPolygon, moveRoom, type FloorDoc, type PlanObject, type Rect as R } from "./model";
+import { docBounds, furniturePlacementIssues, moveBoundaryCorner, moveRoom, moveWallBoundary, newId, objectBounds, roomLabelPlacement, roomPolygon, snapFurnitureToRoom, withPolygon, type FloorDoc, type PlanObject, type Rect as R } from "./model";
 import { FURNITURE_FILL, FURNITURE_STROKE, PLAN, ROOM_FILL, ROOM_FILL_SELECTED } from "./palette";
 import { iconImage } from "./icon-images";
 
@@ -60,7 +60,9 @@ type Props = {
   illustrative: boolean;
   height: number;
   ariaLabel: string;
+  showMeasurements?: boolean;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  onDeleteSelection?: () => void;
 };
 
 const MIN_SCALE = 0.05;
@@ -87,6 +89,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const g = doc.geometry;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const stageRef = React.useRef<Konva.Stage>(null);
+  const furnitureTransformerRef = React.useRef<Konva.Transformer>(null);
   const [width, setWidth] = React.useState(0);
   const [view, setView] = React.useState({ scale: 0.6, x: 40, y: 40 });
   const [cursor, setCursor] = React.useState<SnapResult | null>(null);
@@ -100,6 +103,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const dimOffsetStage = tool === "dimension" && draft.length === 2;
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [preview, setPreview] = React.useState<Geometry | null>(null);
+  const [roomsPreview, setRoomsPreview] = React.useState<FloorDoc["rooms"] | null>(null);
   const [roomPreview, setRoomPreview] = React.useState<{ id: string; pts: Pt[] } | null>(null);
   const [spaceDown, setSpaceDown] = React.useState(false);
   const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
@@ -107,9 +111,12 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const pinch = React.useRef<{ dist: number; centre: Pt } | null>(null);
 
   const drawing = editable && tool !== "select" && tool !== "pan";
+  const selectedFurniture = selection?.kind === "object" ? doc.objects.find((object) => object.id === selection.id && object.kind === "furniture") ?? null : null;
   // Enclosed regions for the fill tool, recomputed only when walls change.
   const regions = React.useMemo(() => (editable && tool === "fill" ? enclosedRegions(g.walls) : []), [editable, tool, g.walls]);
   const geo = preview ?? g;
+  const displayedRooms = roomsPreview ?? doc.rooms;
+  const displayedDoc = roomsPreview || preview ? { ...doc, rooms: displayedRooms, geometry: geo } : doc;
   const L = settings.layers;
   const s = view.scale;
   const px = (n: number) => n / s;
@@ -153,6 +160,15 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
       fit();
     }
   }, [width, fit]);
+
+  React.useEffect(() => {
+    const transformer = furnitureTransformerRef.current;
+    const stage = stageRef.current;
+    if (!transformer || !stage) return;
+    const node = selectedFurniture ? stage.findOne((candidate: Konva.Node) => candidate.id() === selectedFurniture.id) : undefined;
+    transformer.nodes(node ? [node] : []);
+    transformer.getLayer()?.batchDraw();
+  }, [selectedFurniture, doc.objects]);
 
   const zoomAround = React.useCallback((factor: number, point?: Pt) => {
     setView((v) => {
@@ -444,20 +460,39 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const selectable = editable && tool === "select";
   const isSel = (kind: SelectionKind, id: string) => selection?.kind === kind && selection.id === id;
 
+  const clearBoundaryPreview = () => {
+    setPreview(null);
+    setRoomsPreview(null);
+    setCursor(null);
+  };
+
+  const commitBoundaryEdit = (candidate: FloorDoc) => {
+    const conflict = openingConflicts(candidate.geometry)[0];
+    clearBoundaryPreview();
+    if (conflict) {
+      const name = conflict.opening.kind === "window" ? "window" : conflict.opening.kind === "door" ? "door" : "opening";
+      toast.error(`This wall is too short for its ${name}`, {
+        description: `It needs at least ${formatLength(conflict.requiredLength, { precise: true })}. Widen the wall or reduce the ${name} width first.`,
+      });
+      return;
+    }
+    onCommit(candidate);
+  };
+
   const cornerDrag = (from: Pt) => ({
     onDragMove: (e: Konva.KonvaEventObject<DragEvent>) => {
       const raw = { x: e.target.x(), y: e.target.y() };
       const snap = snapPoint(raw, snapCtx(null, (w) => samePt(w.a, from) || samePt(w.b, from)));
       e.target.position(snap.point);
       setCursor(snap);
-      setPreview(moveCorner(g, from, snap.point));
+      const candidate = moveBoundaryCorner(doc, from, snap.point);
+      setPreview(candidate.geometry);
+      setRoomsPreview(candidate.rooms);
     },
     onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => {
       e.cancelBubble = true;
       const to = roundPt({ x: e.target.x(), y: e.target.y() });
-      setPreview(null);
-      setCursor(null);
-      commitGeometry(moveCorner(g, from, to));
+      commitBoundaryEdit(moveBoundaryCorner(doc, from, to));
     },
   });
 
@@ -471,6 +506,29 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     const sel = isSel("wall", w.id);
     const segs = wallSegments(w, geo.openings);
     const colour = sel ? PLAN.accent : PLAN.wall;
+    const wallSelectable = selectable && !w.locked;
+    const baseWall = g.walls.find((candidate) => candidate.id === w.id) ?? w;
+    const baseDirection = wallDir(baseWall);
+    const normal = perp(baseDirection);
+    const baseMid = lerp(baseWall.a, baseWall.b, 0.5);
+    const wallDragDelta = (node: Konva.Node, origin: Pt) => {
+      const raw = { x: node.x() - origin.x, y: node.y() - origin.y };
+      return mul(normal, dot(raw, normal));
+    };
+    const previewWallDrag = (e: Konva.KonvaEventObject<DragEvent>, origin: Pt) => {
+      const delta = wallDragDelta(e.target, origin);
+      e.target.position(add(origin, delta));
+      const candidate = moveWallBoundary(doc, baseWall.id, delta.x, delta.y);
+      setPreview(candidate.geometry);
+      setRoomsPreview(candidate.rooms);
+    };
+    const finishWallDrag = (e: Konva.KonvaEventObject<DragEvent>, origin: Pt) => {
+      e.cancelBubble = true;
+      const delta = wallDragDelta(e.target, origin);
+      e.target.position(origin);
+      commitBoundaryEdit(moveWallBoundary(doc, baseWall.id, Math.round(delta.x), Math.round(delta.y)));
+    };
+    const wallCursor = Math.abs(baseDirection.x) > 0.9 ? "ns-resize" : Math.abs(baseDirection.y) > 0.9 ? "ew-resize" : "move";
     return (
       <Group key={w.id}>
         {segs.map(([t0, t1], i) => {
@@ -489,24 +547,35 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           stroke="transparent"
           strokeWidth={Math.max(w.thickness, px(14))}
           hitStrokeWidth={Math.max(w.thickness, px(14))}
-          listening={selectable || !editable}
-          draggable={selectable && sel}
-          onClick={() => selectable && onSelect({ kind: "wall", id: w.id })}
-          onTap={() => selectable && onSelect({ kind: "wall", id: w.id })}
-          onMouseEnter={(e) => selectable && (e.target.getStage()!.container().style.cursor = sel ? "move" : "pointer")}
+          listening={wallSelectable || !editable}
+          draggable={wallSelectable && sel}
+          onClick={() => wallSelectable && onSelect({ kind: "wall", id: w.id })}
+          onTap={() => wallSelectable && onSelect({ kind: "wall", id: w.id })}
+          onMouseEnter={(e) => wallSelectable && (e.target.getStage()!.container().style.cursor = sel ? wallCursor : "pointer")}
           onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")}
-          onDragMove={(e) => setPreview(moveWall(g, w.id, e.target.x(), e.target.y()))}
-          onDragEnd={(e) => {
-            e.cancelBubble = true;
-            const dx = Math.round(e.target.x()), dy = Math.round(e.target.y());
-            e.target.position({ x: 0, y: 0 });
-            setPreview(null);
-            commitGeometry(moveWall(g, w.id, dx, dy));
-          }}
+          onDragMove={(e) => previewWallDrag(e, { x: 0, y: 0 })}
+          onDragEnd={(e) => finishWallDrag(e, { x: 0, y: 0 })}
         />
-        {sel && selectable && (
+        {sel && wallSelectable && (
           <>
             <LengthTag a={w.a} b={w.b} offset={w.thickness / 2 + px(16)} px={px} text={formatLength(Lw, { precise: true })} />
+            <Rect
+              x={baseMid.x}
+              y={baseMid.y}
+              offsetX={px(9)}
+              offsetY={px(9)}
+              width={px(18)}
+              height={px(18)}
+              cornerRadius={px(5)}
+              fill={PLAN.accent}
+              stroke={PLAN.white}
+              strokeWidth={px(2)}
+              draggable
+              onDragMove={(e) => previewWallDrag(e, baseMid)}
+              onDragEnd={(e) => finishWallDrag(e, baseMid)}
+              onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = wallCursor)}
+              onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")}
+            />
             {[w.a, w.b].map((p, i) => (
               <Rect key={i} x={p.x} y={p.y} offsetX={px(6)} offsetY={px(6)} width={px(12)} height={px(12)} fill={PLAN.white} stroke={PLAN.accent} strokeWidth={px(2)} draggable {...cornerDrag(p)} onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = "crosshair")} onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = "")} />
             ))}
@@ -620,10 +689,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const renderRoom = (room: FloorDoc["rooms"][number]) => {
     const pts = roomPreview?.id === room.id ? roomPreview.pts : roomPolygon(room);
     const sel = isSel("room", room.id);
-    const c = polygonCentroid(pts);
-    const area = polygonArea(pts);
-    const showLabel = room.width * s > 56 && room.height * s > 30;
-    const labelSize = Math.min(px(13), 60);
+    const roomSelectable = selectable && !room.locked;
     return (
       <Group key={room.id}>
         <Line
@@ -634,10 +700,10 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           stroke={sel ? PLAN.accent : g.walls.length ? "transparent" : PLAN.wall}
           strokeWidth={sel ? px(2) : g.walls.length ? 0 : 6}
           dash={sel ? [px(6), px(4)] : undefined}
-          listening={selectable || !editable}
-          draggable={selectable && sel}
-          onClick={() => onSelect({ kind: "room", id: room.id })}
-          onTap={() => onSelect({ kind: "room", id: room.id })}
+          listening={roomSelectable || !editable}
+          draggable={roomSelectable && sel}
+          onClick={() => roomSelectable && onSelect({ kind: "room", id: room.id })}
+          onTap={() => roomSelectable && onSelect({ kind: "room", id: room.id })}
           onDragEnd={(e) => {
             e.cancelBubble = true;
             const dx = Math.round(e.target.x()), dy = Math.round(e.target.y());
@@ -645,13 +711,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
             onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? moveRoom(r, dx, dy) : r)) });
           }}
         />
-        {showLabel && L.rooms && (
-          <Group x={c.x} y={c.y} listening={false}>
-            <Text text={room.name} x={-room.width / 2} width={room.width} y={-labelSize} align="center" fontSize={labelSize} fontStyle="600" fill={PLAN.label} fontFamily={FONT} wrap="none" ellipsis />
-            <Text text={`${illustrative ? "≈ " : ""}${formatArea(area)}`} x={-room.width / 2} width={room.width} y={labelSize * 0.25} align="center" fontSize={labelSize * 0.85} fill={PLAN.labelMuted} fontFamily={FONT} />
-          </Group>
-        )}
-        {sel && selectable &&
+        {sel && roomSelectable &&
           pts.map((p, i) => (
             <Circle
               key={i}
@@ -679,6 +739,39 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           ))}
       </Group>
     );
+  };
+
+  const renderRoomLabel = (room: FloorDoc["rooms"][number]) => {
+    if (!L.rooms || room.width * s < 42 || room.height * s < 24) return null;
+    const placement = roomLabelPlacement(doc, room);
+    const selected = isSel("room", room.id);
+    const labelSize = placement.compact ? Math.min(px(11), 42) : Math.min(px(13), 52);
+    const showArea = !placement.compact || selected;
+    const boxHeight = showArea ? labelSize * 2.15 : labelSize * 1.25;
+    return (
+      <Group key={`room-label-${room.id}`} listening={false}>
+        {placement.outside && placement.leader && <Line points={[placement.x, placement.y + boxHeight / 2, placement.leader.x, placement.leader.y]} stroke={PLAN.labelMuted} strokeWidth={px(1)} />}
+        <Group id={`room-label-${room.id}`} name="room-label" x={placement.x} y={placement.y}>
+          <Rect x={-placement.width / 2} y={-boxHeight / 2} width={placement.width} height={boxHeight} cornerRadius={px(3)} fill={PLAN.bg} opacity={0.84} />
+          <Text text={room.name} x={-placement.width / 2} y={showArea ? -labelSize * 0.9 : -labelSize * 0.55} width={placement.width} align="center" fontSize={labelSize} fontStyle="600" fill={PLAN.label} fontFamily={FONT} wrap="none" ellipsis />
+          {showArea && <Text text={`${illustrative ? "≈ " : ""}${formatArea(polygonArea(roomPolygon(room)))}`} x={-placement.width / 2} y={labelSize * 0.25} width={placement.width} align="center" fontSize={labelSize * 0.8} fill={PLAN.labelMuted} fontFamily={FONT} />}
+        </Group>
+      </Group>
+    );
+  };
+
+  const renderRoomMeasurements = (room: FloorDoc["rooms"][number]) => {
+    const top = room.y - px(24);
+    const left = room.x - px(24);
+    const colour = PLAN.accent;
+    return <Group key={`room-measure-${room.id}`} listening={false}>
+      <Line points={[room.x, top, room.x + room.width, top]} stroke={colour} strokeWidth={px(1)} />
+      <Line points={[room.x, top - px(4), room.x, top + px(4), room.x + room.width, top - px(4), room.x + room.width, top + px(4)]} stroke={colour} strokeWidth={px(1)} />
+      <Text text={`≈ ${formatLength(room.width, { precise: true })}`} x={room.x} y={top - px(18)} width={room.width} align="center" fontSize={px(10)} fontStyle="600" fill={colour} fontFamily={FONT} />
+      <Line points={[left, room.y, left, room.y + room.height]} stroke={colour} strokeWidth={px(1)} />
+      <Line points={[left - px(4), room.y, left + px(4), room.y, left - px(4), room.y + room.height, left + px(4), room.y + room.height]} stroke={colour} strokeWidth={px(1)} />
+      <Text text={`≈ ${formatLength(room.height, { precise: true })}`} x={left - px(15)} y={room.y + room.height} width={room.height} rotation={-90} align="center" fontSize={px(10)} fontStyle="600" fill={colour} fontFamily={FONT} />
+    </Group>;
   };
 
   const renderDimension = (d: Geometry["dimensions"][number], key: string, draftMode = false) => {
@@ -771,7 +864,22 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
     const node = e.target;
     const x = Math.round(node.x() - o.width / 2);
     const y = Math.round(node.y() - o.height / 2);
-    onCommit({ ...doc, objects: doc.objects.map((p) => (p.id === o.id ? { ...p, x, y } : p)) });
+    const next = e.evt.altKey ? { x, y } : snapFurnitureToRoom(doc, o, x, y);
+    node.position({ x: next.x + o.width / 2, y: next.y + o.height / 2 });
+    onCommit({ ...doc, objects: doc.objects.map((p) => (p.id === o.id ? { ...p, ...next } : p)) });
+  };
+
+  const objectTransformEnd = (o: PlanObject) => (e: Konva.KonvaEventObject<Event>) => {
+    e.cancelBubble = true;
+    const node = e.target;
+    const width = Math.max(20, Math.round(o.width * Math.abs(node.scaleX())));
+    const height = Math.max(20, Math.round(o.height * Math.abs(node.scaleY())));
+    const rotation = ((Math.round((o.rotation + node.rotation()) / 90) * 90) % 360 + 360) % 360;
+    const x = Math.round(node.x() - width / 2);
+    const y = Math.round(node.y() - height / 2);
+    node.scale({ x: 1, y: 1 });
+    node.rotation(0);
+    onCommit({ ...doc, objects: doc.objects.map((candidate) => candidate.id === o.id ? { ...candidate, x, y, width, height, rotation } : candidate) });
   };
 
   const labelSize = (n: number) => n;
@@ -836,6 +944,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
               doc.objects.filter((o) => o.kind !== "asset").map((o) => {
                 const sel = isSel("object", o.id);
                 const b = objectBounds(o);
+                const issues = furniturePlacementIssues(doc, o);
                 return (
                   <Group
                     key={o.id}
@@ -846,14 +955,24 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
                     listening={selectable}
                     onDragStart={() => onSelect({ kind: "object", id: o.id })}
                     onDragEnd={objectDragEnd(o)}
+                    onTransformEnd={objectTransformEnd(o)}
                     onClick={() => onSelect({ kind: "object", id: o.id })}
                     onTap={() => onSelect({ kind: "object", id: o.id })}
+                    onMouseEnter={(e) => {
+                      setHovered(o.id);
+                      e.target.getStage()!.container().style.cursor = "move";
+                    }}
+                    onMouseLeave={(e) => {
+                      setHovered(null);
+                      e.target.getStage()!.container().style.cursor = "";
+                    }}
                   >
                     <Group rotation={o.rotation} offsetX={o.width / 2} offsetY={o.height / 2}>
-                      <Rect width={o.width} height={o.height} cornerRadius={6} fill={FURNITURE_FILL} stroke={sel ? PLAN.accent : FURNITURE_STROKE} strokeWidth={sel ? px(2) : px(1.25)} opacity={editable ? 1 : 0.85} />
+                      <Rect width={o.width} height={o.height} cornerRadius={6} fill={FURNITURE_FILL} stroke={issues.length ? PLAN.warning : sel ? PLAN.accent : FURNITURE_STROKE} strokeWidth={issues.length || sel ? px(2) : px(1.25)} dash={issues.length ? [px(5), px(4)] : undefined} opacity={editable ? 1 : 0.85} />
                       <FurnitureDetail o={o} />
+                      {issues.length > 0 && <Circle x={o.width - px(7)} y={px(7)} radius={px(4)} fill={PLAN.warning} stroke={PLAN.white} strokeWidth={px(1.5)} listening={false} />}
                     </Group>
-                    {b.width * s > 54 && b.height * s > 16 && (
+                    {(hovered === o.id || sel) && b.width * s > 54 && b.height * s > 16 && (
                       <Text text={o.label ?? ""} x={-b.width / 2} y={-b.height / 2} width={b.width} height={b.height} align="center" verticalAlign="middle" fontSize={Math.min(px(11), b.height * 0.4)} fill={PLAN.labelMuted} fontFamily={FONT} wrap="none" ellipsis listening={false} />
                     )}
                   </Group>
@@ -863,6 +982,8 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
             {L.walls && geo.walls.map(renderWall)}
             {L.openings && geo.openings.map(renderOpening)}
             {L.dimensions && geo.dimensions.map((d) => renderDimension(d, d.id))}
+            {doc.rooms.map(renderRoomLabel)}
+            {(props.showMeasurements ? doc.rooms : selection?.kind === "room" ? doc.rooms.filter((room) => room.id === selection.id) : []).map(renderRoomMeasurements)}
             {L.labels &&
               geo.labels.map((lb) => (
                 <Text
@@ -885,6 +1006,38 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
                   }}
                 />
               ))}
+          </Layer>
+
+          <Layer listening={!drawing}>
+            {editable && selectedFurniture && (
+              <>
+                <Transformer
+                  ref={furnitureTransformerRef}
+                  enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
+                  keepRatio={false}
+                  flipEnabled={false}
+                  rotateEnabled
+                  rotationSnaps={[0, 90, 180, 270]}
+                  rotationSnapTolerance={45}
+                  anchorSize={px(10)}
+                  anchorCornerRadius={px(3)}
+                  anchorFill={PLAN.white}
+                  anchorStroke={PLAN.accent}
+                  anchorStrokeWidth={px(2)}
+                  borderStroke={PLAN.accent}
+                  borderStrokeWidth={px(1.5)}
+                  rotateAnchorOffset={px(28)}
+                  boundBoxFunc={(oldBox, newBox) => newBox.width < 20 || newBox.height < 20 ? oldBox : newBox}
+                />
+                {props.onDeleteSelection && (() => {
+                  const b = objectBounds(selectedFurniture);
+                  return <Group x={b.x + b.width + px(10)} y={b.y - px(10)} scaleX={1 / s} scaleY={1 / s} onClick={props.onDeleteSelection} onTap={props.onDeleteSelection}>
+                    <Circle radius={12} fill={PLAN.white} stroke={PLAN.danger} strokeWidth={1.5} shadowColor="#1d221f" shadowOpacity={0.15} shadowBlur={4} />
+                    <Text text="×" x={-8} y={-9} width={16} height={18} align="center" fontSize={17} fontStyle="600" fill={PLAN.danger} fontFamily={FONT} />
+                  </Group>;
+                })()}
+              </>
+            )}
           </Layer>
 
           {/* Appliance markers: constant on-screen size */}
@@ -1020,5 +1173,16 @@ function FurnitureDetail({ o }: { o: PlanObject }) {
   if (o.furnitureType === "sofa") return <Rect listening={false} x={12} y={o.height * 0.35} width={o.width - 24} height={o.height * 0.55} cornerRadius={6} stroke={stroke} strokeWidth={2} />;
   if (o.furnitureType === "dining_table") return <Rect listening={false} x={10} y={10} width={o.width - 20} height={o.height - 20} cornerRadius={4} stroke={stroke} strokeWidth={1.5} dash={[6, 4]} />;
   if (o.furnitureType === "counter") return <Line listening={false} points={[0, o.height - 12, o.width, o.height - 12]} stroke={stroke} strokeWidth={2} />;
+  if (o.furnitureType === "dining_chair") return <Rect listening={false} x={7} y={7} width={o.width - 14} height={o.height - 14} cornerRadius={8} stroke={stroke} strokeWidth={2} />;
+  if (o.furnitureType === "toilet") return <Group listening={false}><Rect x={10} y={5} width={o.width - 20} height={18} cornerRadius={4} stroke={stroke} strokeWidth={2} /><Circle x={o.width / 2} y={o.height * 0.62} radius={Math.min(o.width * 0.34, o.height * 0.24)} stroke={stroke} strokeWidth={2} /></Group>;
+  if (o.furnitureType === "basin" || o.furnitureType === "sink") return <Group listening={false}><Rect x={6} y={6} width={o.width - 12} height={o.height - 12} cornerRadius={8} stroke={stroke} strokeWidth={2} /><Circle x={o.width / 2} y={o.height / 2} radius={4} fill={stroke} /></Group>;
+  if (o.furnitureType === "shower") return <Group listening={false}><Line points={[8, 8, o.width - 8, o.height - 8]} stroke={stroke} strokeWidth={1.5} /><Line points={[o.width - 8, 8, 8, o.height - 8]} stroke={stroke} strokeWidth={1.5} /><Circle x={o.width / 2} y={o.height / 2} radius={8} stroke={stroke} strokeWidth={2} /></Group>;
+  if (o.furnitureType === "hob") return <Group listening={false}>{[[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]].map(([x, y], i) => <Circle key={i} x={o.width * x} y={o.height * y} radius={Math.min(o.width, o.height) * 0.12} stroke={stroke} strokeWidth={1.5} />)}</Group>;
   return null;
+}
+
+function pointOnSegment(p: Pt, a: Pt, b: Pt) {
+  const cross = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x));
+  if (cross > Math.max(2, dist(a, b) * 0.005)) return false;
+  return p.x >= Math.min(a.x, b.x) - 1 && p.x <= Math.max(a.x, b.x) + 1 && p.y >= Math.min(a.y, b.y) - 1 && p.y <= Math.max(a.y, b.y) + 1;
 }

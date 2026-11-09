@@ -5,12 +5,13 @@ import { getAppContext } from "@/lib/server/context";
 import { listRooms } from "@/features/assets/queries";
 import { getPrimaryProperty } from "@/features/home/server";
 import { OnboardingFlow } from "@/features/onboarding/flow";
+import { GuestSetup } from "@/features/guest/setup";
 
 export const metadata: Metadata = { title: "Set up your home" };
 
 export default async function OnboardingPage() {
   const ctx = await getAppContext();
-  if (!ctx) redirect("/sign-in?next=/onboarding");
+  if (!ctx) return <GuestSetup />;
 
   // People who joined an existing household skip setup.
   if (ctx.household && ctx.role === "member") redirect("/overview");

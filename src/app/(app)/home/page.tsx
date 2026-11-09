@@ -6,20 +6,29 @@ import { EmptyState, Panel } from "@/components/ui/misc";
 import { withUser } from "@/lib/db";
 import { addDays } from "@/lib/domain/dates";
 import { DUE_SOON_DAYS } from "@/lib/domain/status";
-import { requireHouseholdContext } from "@/lib/server/context";
+import { getAppContext } from "@/lib/server/context";
 import { listAssetOptions } from "@/features/assets/queries";
 import { HomeTwin } from "@/features/home/home-twin";
 import type { TwinAsset } from "@/features/home/edit-panels";
 import { getFloors, getPrimaryProperty, loadFloorDoc } from "@/features/home/server";
 import { listMembers } from "@/features/maintenance/queries";
+import { GuestEditor } from "@/features/guest/editor";
+import { createOwnGuestHome, createSampleGuestHome } from "@/features/guest/data";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = { title: "My Home" };
 
-type SP = { floor?: string; edit?: string; asset?: string; welcome?: string };
+type SP = { floor?: string; edit?: string; asset?: string; welcome?: string; guest?: "sample" | "own" };
 
 export default async function HomePage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const ctx = await requireHouseholdContext();
+  const ctx = await getAppContext();
+  if (!ctx) {
+    const kind = sp.guest === "own" ? "own" : "sample";
+    const initial = kind === "sample" ? createSampleGuestHome() : createOwnGuestHome("hdb_4_room");
+    return <GuestEditor initialHome={initial} initialEdit={sp.edit === "1"} />;
+  }
+  if (!ctx.household || !ctx.role) redirect("/onboarding");
   const hid = ctx.household.id;
   const today = ctx.today;
   const soon = addDays(today, DUE_SOON_DAYS);

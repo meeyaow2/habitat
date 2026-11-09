@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { docsEqual, historyReducer, HISTORY_LIMIT, initHistory } from "@/features/home/editor-store";
-import { alignRect, areaM2, boundsOf, objectBounds, roomAt, snap, validateDoc, type FloorDoc, type PlanObject, type RoomShape } from "@/features/home/model";
+import { alignRect, areaM2, boundsOf, furniturePlacementIssues, objectBounds, roomAt, roomLabelPlacement, scaleFloorProportionally, snap, validateDoc, type FloorDoc, type PlanObject, type RoomShape } from "@/features/home/model";
 import { floorExtent, instantiateFloor, suggestedTemplate, TEMPLATES } from "@/features/home/templates";
 
 const room = (id: string, x: number, y: number, w: number, h: number): RoomShape => ({ id, name: id, roomType: "other", x, y, width: w, height: h, sortOrder: 0 });
@@ -57,6 +57,29 @@ describe("geometry", () => {
   it("computes overall bounds", () => {
     expect(boundsOf([room("a", 0, 0, 100, 100), room("b", 200, 50, 100, 300)])).toEqual({ x: 0, y: 0, width: 300, height: 350 });
     expect(boundsOf([])).toBeNull();
+  });
+
+  it("keeps furniture size while proportionally scaling rooms, walls and door positions", () => {
+    const bed: PlanObject = { id: "bed", kind: "furniture", assetId: null, furnitureType: "bed_double", label: "Queen bed", x: 100, y: 80, width: 155, height: 200, rotation: 0 };
+    const source: FloorDoc = {
+      rooms: [room("bedroom", 0, 0, 400, 400)],
+      objects: [bed],
+      geometry: { walls: [{ id: "wall", a: { x: 0, y: 0 }, b: { x: 400, y: 0 }, thickness: 10 }], openings: [{ id: "door", wallId: "wall", kind: "door", offset: 100, width: 80, flip: false, hingeEnd: false, height: 210, sill: 0 }], dimensions: [], labels: [] },
+    };
+    const scaled = scaleFloorProportionally(source, 0.8);
+    expect(scaled.rooms[0].width).toBe(320);
+    expect(scaled.objects[0]).toMatchObject({ width: 155, height: 200 });
+    expect(scaled.geometry.walls[0].b.x).toBe(320);
+    expect(scaled.geometry.openings[0]).toMatchObject({ wallId: "wall", offset: 80, width: 80 });
+  });
+
+  it("moves a room label when furniture covers its previous clear position", () => {
+    const living = room("living", 0, 0, 400, 400);
+    const empty = doc([living]);
+    const first = roomLabelPlacement(empty, living);
+    const sofa: PlanObject = { id: "sofa", kind: "furniture", assetId: null, furnitureType: "sofa", label: "Sofa", x: first.x - 100, y: first.y - 50, width: 200, height: 100, rotation: 0 };
+    const shifted = roomLabelPlacement(doc([living], [sofa]), living);
+    expect({ x: shifted.x, y: shifted.y }).not.toEqual({ x: first.x, y: first.y });
   });
 });
 
@@ -144,6 +167,102 @@ describe("starter templates", () => {
     expect(suggestedTemplate("condo")).toBe("condo_3br");
     expect(suggestedTemplate("landed")).toBe("landed_terrace");
     expect(suggestedTemplate("other")).toBe("blank");
+  });
+
+  it("starts the 4-room HDB beds and wardrobes clear of conflicts", () => {
+    const template = TEMPLATES.find((candidate) => candidate.key === "hdb_4_room")!;
+    const d = instantiateFloor(template.floors[0]);
+    const bedroomFurniture = d.objects.filter((object) =>
+      object.kind === "furniture" && ["bed_double", "bed_single", "wardrobe"].includes(object.furnitureType ?? ""),
+    );
+    expect(bedroomFurniture.length).toBeGreaterThanOrEqual(6);
+    for (const object of bedroomFurniture) expect(furniturePlacementIssues(d, object), object.label ?? object.id).toEqual([]);
+  });
+
+  it("matches each published HDB reference area at one real-world scale", () => {
+    for (const key of ["hdb_2_room", "hdb_3_room", "hdb_4_room", "hdb_5_room"] as const) {
+      const template = TEMPLATES.find((candidate) => candidate.key === key)!;
+      const d = instantiateFloor(template.floors[0]);
+      const modeledArea = d.rooms.reduce((sum, candidate) => sum + candidate.width * candidate.height / 10000, 0);
+      expect(modeledArea, key).toBeCloseTo(template.reference!.totalAreaM2, 0);
+      expect(template.reference!.url).toContain("hdb.gov.sg");
+    }
+  });
+
+  it("gives every required starter a front-door route to each usable room", () => {
+    const required = ["hdb_2_room", "hdb_3_room", "hdb_4_room", "hdb_5_room", "condo_2br", "condo_3br"] as const;
+    for (const key of required) {
+      const template = TEMPLATES.find((candidate) => candidate.key === key)!;
+      const d = instantiateFloor(template.floors[0]);
+      const graph = new Map<string, Set<string>>();
+      const connect = (a: string, b: string) => {
+        graph.set(a, new Set([...(graph.get(a) ?? []), b]));
+        graph.set(b, new Set([...(graph.get(b) ?? []), a]));
+      };
+      for (const opening of d.geometry.openings.filter((candidate) => candidate.kind !== "window")) {
+        const wall = d.geometry.walls.find((candidate) => candidate.id === opening.wallId)!;
+        const length = Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y);
+        const direction = { x: (wall.b.x - wall.a.x) / length, y: (wall.b.y - wall.a.y) / length };
+        const at = { x: wall.a.x + direction.x * opening.offset, y: wall.a.y + direction.y * opening.offset };
+        const normal = { x: -direction.y * 30, y: direction.x * 30 };
+        const a = roomAt(d.rooms, { x: at.x + normal.x, y: at.y + normal.y })?.id ?? "outside";
+        const b = roomAt(d.rooms, { x: at.x - normal.x, y: at.y - normal.y })?.id ?? "outside";
+        if (a !== b) connect(a, b);
+      }
+      const reached = new Set<string>(["outside"]);
+      const queue = ["outside"];
+      while (queue.length) {
+        const current = queue.shift()!;
+        for (const next of graph.get(current) ?? []) if (!reached.has(next)) { reached.add(next); queue.push(next); }
+      }
+      const usable = d.rooms.filter((candidate) => candidate.name !== "Air-con ledge");
+      for (const candidate of usable) expect(reached.has(candidate.id), `${key}: no route to ${candidate.name}`).toBe(true);
+      expect(d.geometry.openings.some((candidate) => candidate.kind === "window"), `${key}: needs exterior windows`).toBe(true);
+    }
+  });
+
+  it("starts all six required plans without furniture conflicts or blocked doors", () => {
+    const required = ["hdb_2_room", "hdb_3_room", "hdb_4_room", "hdb_5_room", "condo_2br", "condo_3br"] as const;
+    for (const key of required) {
+      const template = TEMPLATES.find((candidate) => candidate.key === key)!;
+      const d = instantiateFloor(template.floors[0]);
+      for (const object of d.objects.filter((candidate) => candidate.kind === "furniture")) {
+        expect(furniturePlacementIssues(d, object), `${key}: ${object.label}`).toEqual([]);
+      }
+    }
+  });
+
+  it("starts every required bed with its pillow end against a bedroom wall", () => {
+    const required = ["hdb_2_room", "hdb_3_room", "hdb_4_room", "hdb_5_room", "condo_2br", "condo_3br"] as const;
+    for (const key of required) {
+      const d = instantiateFloor(TEMPLATES.find((candidate) => candidate.key === key)!.floors[0]);
+      const beds = d.objects.filter((candidate) => candidate.furnitureType === "bed_double" || candidate.furnitureType === "bed_single");
+      expect(beds.length, `${key}: furnished beds`).toBeGreaterThan(0);
+      for (const bed of beds) {
+        const centre = { x: bed.x + bed.width / 2, y: bed.y + bed.height / 2 };
+        const bedroom = roomAt(d.rooms, centre)!;
+        const radians = bed.rotation * Math.PI / 180;
+        // Pillows are drawn along the local top edge, so this is the centre of the headboard.
+        const headboard = {
+          x: centre.x + Math.sin(radians) * bed.height / 2,
+          y: centre.y - Math.cos(radians) * bed.height / 2,
+        };
+        const wallGap = Math.min(
+          Math.abs(headboard.x - bedroom.x),
+          Math.abs(headboard.x - (bedroom.x + bedroom.width)),
+          Math.abs(headboard.y - bedroom.y),
+          Math.abs(headboard.y - (bedroom.y + bedroom.height)),
+        );
+        expect(wallGap, `${key}: ${bedroom.name} headboard gap`).toBeLessThanOrEqual(10);
+      }
+    }
+  });
+
+  it("reports an overlap as a gentle furniture placement hint", () => {
+    const sofa: PlanObject = { id: "sofa", kind: "furniture", assetId: null, furnitureType: "sofa", label: "Sofa", x: 60, y: 60, width: 120, height: 80, rotation: 0 };
+    const table: PlanObject = { ...sofa, id: "table", furnitureType: "coffee_table", label: "Coffee table", x: 100 };
+    const d = doc([room("living", 0, 0, 400, 300)], [sofa, table]);
+    expect(furniturePlacementIssues(d, sofa)).toContain("overlap");
   });
 
   it("generates fresh ids on every instantiation", () => {

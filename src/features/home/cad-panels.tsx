@@ -12,7 +12,7 @@ import {
 } from "./cad";
 import type { Layers, LayerKey, Selection } from "./canvas";
 import { CommitInput, NudgePad, PanelSection } from "./edit-panels";
-import { newId, roomPolygon, ROOM_TYPES, type FloorDoc, type PlanObject, type RoomType } from "./model";
+import { furniturePlacementIssues, newId, resizeRoom, roomPolygon, ROOM_TYPES, type FloorDoc, type PlanObject, type RoomType } from "./model";
 
 const cm = (v: string) => parseLength(v.includes("m") || v.includes("c") ? v : `${v}cm`);
 
@@ -27,6 +27,7 @@ export function CadProperties({
   assetName,
   illustrative,
   level,
+  onOpenAsset,
 }: {
   doc: FloorDoc;
   selection: Selection;
@@ -38,6 +39,7 @@ export function CadProperties({
   assetName: (id: string) => string;
   illustrative: boolean;
   level: React.ReactNode;
+  onOpenAsset?: (assetId: string) => void;
 }) {
   const g = doc.geometry;
   const setG = (next: Geometry) => onChange({ ...doc, geometry: next });
@@ -196,6 +198,10 @@ export function CadProperties({
               {ROOM_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </NativeSelect>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <CommitInput id="room-width" label="Approx. width" value={(room.width / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) onChange(resizeRoom(doc, room.id, Math.round(n * 100), room.height)); }} />
+            <CommitInput id="room-depth" label="Approx. depth" value={(room.height / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) onChange(resizeRoom(doc, room.id, room.width, Math.round(n * 100))); }} />
+          </div>
           <dl className="grid grid-cols-2 gap-y-1 text-sm">
             <dt className="text-fg-muted">Area</dt><dd className="text-right tabular-nums">{illustrative ? "≈ " : ""}{formatArea(polygonArea(pts))}</dd>
             <dt className="text-fg-muted">Perimeter</dt><dd className="text-right tabular-nums">{formatLength(perimeter)}</dd>
@@ -229,16 +235,20 @@ export function CadProperties({
         <div className="mt-3 flex flex-col gap-3">
           <NudgePad onNudge={onNudge} />
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="secondary" asChild><Link href={`/assets/${o.assetId}`}><ExternalLink aria-hidden /> Details</Link></Button>
+            {onOpenAsset ? <Button size="sm" variant="secondary" onClick={() => onOpenAsset(o.assetId!)}><ExternalLink aria-hidden /> Details</Button> : <Button size="sm" variant="secondary" asChild><Link href={`/assets/${o.assetId}`}><ExternalLink aria-hidden /> Details</Link></Button>}
+            <Button size="sm" variant="secondary" onClick={onRotate}><RotateCw aria-hidden /> Rotate</Button>
             <Button size="sm" variant="danger-ghost" onClick={onDelete}><Trash2 aria-hidden /> Remove from plan</Button>
           </div>
         </div>
       </PanelSection>
     );
   }
+  const issues = furniturePlacementIssues(doc, o);
   return (
     <PanelSection title="Furniture">
       <div className="flex flex-col gap-3">
+        <p className="text-xs text-fg-muted">Drag on the plan. Use the corner handles to resize and the round handle to rotate.</p>
+        {issues.length > 0 && <p className="rounded-md bg-warning-soft px-2.5 py-2 text-xs text-warning">Placement hint: {issues.map((issue) => issue === "overlap" ? "overlaps another piece" : issue === "outside-room" ? "crosses a room edge" : "sits in a door swing").join(" · ")}. You can leave it here or adjust it.</p>}
         <CommitInput id="obj-label" label="Label" value={o.label ?? ""} onCommit={(v) => update({ label: v.trim().slice(0, 60) || null })} />
         <div className="grid grid-cols-2 gap-2">
           <CommitInput id="obj-w" label="Width" type="number" step="5" min="10" suffix="cm" value={String(Math.round(o.width))} onCommit={(v) => Number(v) >= 10 && update({ width: Math.round(Number(v)) })} />

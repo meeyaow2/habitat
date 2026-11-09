@@ -14,7 +14,7 @@ Built for Singapore first (HDB flats, condominiums, landed homes; SGD; `en-SG` d
 | **CAD-style drafting**: wall tool with typed lengths (3.2, 320cm, 3m20), object snaps (endpoint, midpoint, on-wall, tracking), ortho (F8), grid (F7), snap (F3), joined corners, T-junctions, doors (single, double, sliding, pocket — new doors swing into the room)/windows/openings in walls, polygon rooms with live area, fill room (click inside closed walls to create the room), dimensions, text, measure, command line + X/Y readout, layers | ✅ |
 | Live 3D view from the same drawing (real door/window openings, cutaway), side-by-side with 2D | ✅ |
 | Multiple levels; export DXF (AutoCAD, mm) and PNG | ✅ |
-| Starter templates converted to editable walls; "Draw it yourself" is the default | ✅ |
+| Metric HDB 2-room Flexi, 3-room, 4-room and 5-room starter plans referenced to HDB's Bangkit Breeze sales brochure; optional room/flat dimension adjustment; "Draw it yourself" remains available | ✅ |
 | Appliance drawer on the plan backed by the live asset record | ✅ |
 | Appliances & assets: CRUD, search, filters, sort, grid/list, archive, delete with retention policy | ✅ |
 | Warranties: expiry tracking, configurable reminder window, receipts linked as proof | ✅ |
@@ -43,7 +43,9 @@ npm run db:seed                   # optional: dev@habitat.local / habitat-dev-pa
 npm run dev
 ```
 
-Open http://localhost:3000 — or click **Explore a sample home** for demo mode.
+Open http://localhost:3000. **Explore a sample home** loads a bundled, editable 4-room HDB in guest mode; no database or sign-in is required, and edits stay in browser storage.
+
+The HDB starter areas and room relationships use the official [Bangkit Breeze sales brochure](https://assets.hdb.gov.sg/residential/buying-a-flat/finding-a-flat/sales-brochure/25JULBTO_pdf_selection/bangkit_breeze.pdf). Published total/internal areas are kept separately from the air-con ledge; individual room measurements inferred from the plan scale are shown as approximate.
 
 A quick local Postgres with Docker:
 
@@ -55,8 +57,7 @@ docker run -d --name habitat-pg -e POSTGRES_PASSWORD=postgres -p 54322:5432 post
 
 1. Create a project. Apply the migrations with the Supabase CLI (`supabase link` then `supabase db push`). These are the same files the local runner uses; the auth shim is never applied to Supabase.
 2. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server-only), and `DATABASE_URL` (use the **transaction pooler** string for Vercel).
-3. Enable **anonymous sign-ins** in Auth settings if you want demo mode.
-4. The storage migration creates a private `household-documents` bucket with member-only policies.
+3. The storage migration creates a private `household-documents` bucket with member-only policies. The public sample and guest setup do not use Supabase Auth or Storage.
 
 > The Supabase adapters are implemented but were **not exercised against a live Supabase project** in development (the build environment could not reach Supabase). The local mode, which shares the same migrations and RLS, is fully tested.
 
@@ -85,7 +86,7 @@ Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (server-only); `AI_MODEL` de
 
 ## Deployment (Vercel + Supabase)
 
-Set the environment variables above in Vercel, deploy, and schedule `npm run db:cleanup-demo` (or call `public.cleanup_expired_demo_accounts()` from a Supabase cron) to remove demo accounts after 24 hours. The in-memory rate limiter is per instance; use a shared store (e.g. Upstash) for multi-instance deployments.
+Set the environment variables above in Vercel and deploy. Guest homes and the bundled sample live only in each visitor's browser; signed-in household data continues to use Supabase. The in-memory rate limiter is per instance; use a shared store (e.g. Upstash) for multi-instance deployments.
 
 ## Project layout
 

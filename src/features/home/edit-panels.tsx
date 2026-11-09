@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import * as React from "react";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, GripVertical, MapPin, Plus, RotateCw, Square, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, GripVertical, MapPin, Plus, RotateCw, Trash2 } from "lucide-react";
 import { CategoryIcon } from "@/components/category-icon";
 import { Button } from "@/components/ui/button";
 import { Input, NativeSelect } from "@/components/ui/input";
@@ -34,19 +34,28 @@ function PanelSection({ title, children, action, className }: { title: string; c
   );
 }
 
-export function AddPanel({ onAddRoom, onAddFurniture }: { onAddRoom: () => void; onAddFurniture: (type: string) => void }) {
+const BEGINNER_FURNITURE = ["bed_double", "bed_single", "wardrobe", "sofa", "dining_table", "desk", "armchair", "coffee_table"];
+
+export function AddPanel({ onAddRoom, onAddBalcony, onAddFurniture }: { onAddRoom: () => void; onAddBalcony?: () => void; onAddFurniture: (type: string) => void }) {
   return (
-    <PanelSection title="Add">
-      <Button variant="secondary" className="w-full justify-start" onClick={onAddRoom}><Square aria-hidden /> Room</Button>
-      <label htmlFor="add-furniture" className="mt-3 block text-xs font-medium text-fg-muted">Furniture</label>
-      <div className="mt-1.5 flex flex-wrap gap-1.5" id="add-furniture">
-        {FURNITURE_TYPES.map((f) => (
-          <button key={f.value} type="button" onClick={() => onAddFurniture(f.value)} className="h-8 rounded-sm border border-line bg-surface px-2 text-xs text-fg-muted hover:border-line-strong hover:text-fg">
-            {f.label}
-          </button>
-        ))}
-      </div>
-    </PanelSection>
+    <>
+      <PanelSection title="Spaces">
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" className="justify-start" onClick={onAddRoom}><Plus aria-hidden /> Add room</Button>
+          {onAddBalcony && <Button variant="secondary" className="justify-start" onClick={onAddBalcony}><Plus aria-hidden /> Add balcony</Button>}
+        </div>
+      </PanelSection>
+      <PanelSection title="Furniture">
+        <p className="mb-2 text-xs text-fg-muted">Add a piece, then drag it into place. Select it for resize and rotate handles.</p>
+        <div className="grid grid-cols-2 gap-1.5" id="add-furniture">
+          {FURNITURE_TYPES.filter((f) => BEGINNER_FURNITURE.includes(f.value)).map((f) => (
+            <button key={f.value} type="button" onClick={() => onAddFurniture(f.value)} className="min-h-9 rounded-sm border border-line bg-surface px-2 py-1.5 text-left text-xs font-medium text-fg-muted hover:border-line-strong hover:text-fg">
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </PanelSection>
+    </>
   );
 }
 

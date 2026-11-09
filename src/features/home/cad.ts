@@ -4,7 +4,7 @@
  */
 export type Pt = { x: number; y: number };
 
-export type Wall = { id: string; a: Pt; b: Pt; thickness: number };
+export type Wall = { id: string; a: Pt; b: Pt; thickness: number; /** Fixed structural wall in a starter plan. */ locked?: boolean };
 
 export type OpeningKind = "door" | "window" | "opening";
 export const DOOR_STYLES = ["single", "double", "sliding", "pocket"] as const;
@@ -177,6 +177,28 @@ export function clampOpening(w: Wall, o: Pick<Opening, "offset" | "width">) {
   return { width, offset: L < width + 10 ? L / 2 : offset };
 }
 
+/** Keep an opening's physical width while its wall moves; only its position may be clamped. */
+export function keepOpeningAttached(w: Wall, o: Pick<Opening, "offset" | "width">) {
+  const length = wallLength(w);
+  if (length < o.width + 10) return { width: o.width, offset: length / 2 };
+  return {
+    width: o.width,
+    offset: Math.max(o.width / 2 + 5, Math.min(length - o.width / 2 - 5, o.offset)),
+  };
+}
+
+export type OpeningConflict = { wall: Wall; opening: Opening; requiredLength: number };
+
+/** Openings that no longer fit their wall without changing the opening width. */
+export function openingConflicts(g: Geometry): OpeningConflict[] {
+  const walls = new Map(g.walls.map((wall) => [wall.id, wall]));
+  return g.openings.flatMap((opening) => {
+    const wall = walls.get(opening.wallId);
+    if (!wall || wallLength(wall) >= opening.width + 10) return [];
+    return [{ wall, opening, requiredLength: opening.width + 10 }];
+  });
+}
+
 /** Start/end points of an opening on the wall centreline. */
 export function openingSpan(w: Wall, o: Pick<Opening, "offset" | "width">) {
   const d = wallDir(w);
@@ -221,7 +243,12 @@ export function moveCorner(g: Geometry, from: Pt, to: Pt): Geometry {
     for (const x of e) nw = { ...nw, [x.end]: roundPt(to) };
     return nw;
   });
-  return { ...g, walls: walls.filter((w) => wallLength(w) >= 1), openings: reclampOpenings(walls, g.openings) };
+  const keptWalls = walls.filter((w) => wallLength(w) >= 1);
+  const byId = new Map(keptWalls.map((wall) => [wall.id, wall]));
+  const openings = g.openings
+    .filter((opening) => byId.has(opening.wallId))
+    .map((opening) => ({ ...opening, ...keepOpeningAttached(byId.get(opening.wallId)!, opening) }));
+  return { ...g, walls: keptWalls, openings };
 }
 
 export function reclampOpenings(walls: Wall[], openings: Opening[]) {
