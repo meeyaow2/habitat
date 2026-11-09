@@ -624,7 +624,12 @@ export function splitWallAt(g: Geometry, wallId: string, p: Pt, newId: () => str
   const w2: Wall = { ...w, id: newId(), a: at };
   const openings = g.openings.map((o) => (o.wallId !== w.id || o.offset <= cut ? o : { ...o, wallId: w2.id, offset: o.offset - cut }));
   const walls = g.walls.flatMap((x) => (x.id === w.id ? [w1, w2] : [x]));
-  return { ...g, walls, openings: reclampOpenings(walls, openings) };
+  const byId = new Map(walls.map((wall) => [wall.id, wall]));
+  return {
+    ...g,
+    walls,
+    openings: openings.map((opening) => ({ ...opening, ...keepOpeningAttached(byId.get(opening.wallId)!, opening) })),
+  };
 }
 
 /** Move a whole wall; walls joined at its ends stretch to follow. */
@@ -632,12 +637,22 @@ export function moveWall(g: Geometry, wallId: string, dx: number, dy: number): G
   const w = g.walls.find((x) => x.id === wallId);
   if (!w) return g;
   const d = { x: dx, y: dy };
-  let next = g;
-  // Move the far end first, then the near end, so shared corners resolve correctly.
-  next = moveCorner(next, w.b, add(w.b, d));
-  const moved = next.walls.find((x) => x.id === wallId)!;
-  next = moveCorner(next, moved.a, add(w.a, d));
-  return next;
+  // Include T-junctions that terminate in the middle of the wall, not just its two ends.
+  // This keeps connected corners attached when a merged boundary wall moves.
+  const onWall = (point: Pt) => {
+    const projection = projectOnSegment(point, w.a, w.b);
+    return projection.dist <= 1 && projection.t >= -0.001 && projection.t <= 1.001;
+  };
+  const walls = g.walls.map((candidate) => ({
+    ...candidate,
+    a: onWall(candidate.a) ? roundPt(add(candidate.a, d)) : candidate.a,
+    b: onWall(candidate.b) ? roundPt(add(candidate.b, d)) : candidate.b,
+  })).filter((candidate) => wallLength(candidate) >= 1);
+  const byId = new Map(walls.map((wall) => [wall.id, wall]));
+  const openings = g.openings
+    .filter((opening) => byId.has(opening.wallId))
+    .map((opening) => ({ ...opening, ...keepOpeningAttached(byId.get(opening.wallId)!, opening) }));
+  return { ...g, walls, openings };
 }
 
 /** Change a wall's length by moving its `b` end along its direction (joined walls follow). */

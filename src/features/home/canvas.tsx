@@ -104,7 +104,6 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [preview, setPreview] = React.useState<Geometry | null>(null);
   const [roomsPreview, setRoomsPreview] = React.useState<FloorDoc["rooms"] | null>(null);
-  const [roomPreview, setRoomPreview] = React.useState<{ id: string; pts: Pt[] } | null>(null);
   const [spaceDown, setSpaceDown] = React.useState(false);
   const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
   const fitted = React.useRef(false);
@@ -687,7 +686,9 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
   };
 
   const renderRoom = (room: FloorDoc["rooms"][number]) => {
-    const pts = roomPreview?.id === room.id ? roomPreview.pts : roomPolygon(room);
+    const shownRoom = displayedRooms.find((candidate) => candidate.id === room.id) ?? room;
+    const pts = roomPolygon(shownRoom);
+    const basePts = roomPolygon(room);
     const sel = isSel("room", room.id);
     const roomSelectable = selectable && !room.locked;
     return (
@@ -726,14 +727,13 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
                 const snap = snapPoint({ x: e.target.x(), y: e.target.y() }, snapCtx(null));
                 e.target.position(snap.point);
                 setCursor(snap);
-                setRoomPreview({ id: room.id, pts: pts.map((q, j) => (j === i ? snap.point : q)) });
+                const candidate = moveBoundaryCorner(doc, basePts[i], snap.point);
+                setPreview(candidate.geometry);
+                setRoomsPreview(candidate.rooms);
               }}
               onDragEnd={(e) => {
                 e.cancelBubble = true;
-                const next = pts.map((q, j) => (j === i ? roundPt({ x: e.target.x(), y: e.target.y() }) : q));
-                setRoomPreview(null);
-                setCursor(null);
-                onCommit({ ...doc, rooms: doc.rooms.map((r) => (r.id === room.id ? withPolygon(r, next) : r)) });
+                commitBoundaryEdit(moveBoundaryCorner(doc, basePts[i], roundPt({ x: e.target.x(), y: e.target.y() })));
               }}
             />
           ))}
@@ -743,7 +743,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
 
   const renderRoomLabel = (room: FloorDoc["rooms"][number]) => {
     if (!L.rooms || room.width * s < 42 || room.height * s < 24) return null;
-    const placement = roomLabelPlacement(doc, room);
+    const placement = roomLabelPlacement(displayedDoc, room);
     const selected = isSel("room", room.id);
     const labelSize = placement.compact ? Math.min(px(11), 42) : Math.min(px(13), 52);
     const showArea = !placement.compact || selected;
@@ -944,7 +944,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
               doc.objects.filter((o) => o.kind !== "asset").map((o) => {
                 const sel = isSel("object", o.id);
                 const b = objectBounds(o);
-                const issues = furniturePlacementIssues(doc, o);
+                const issues = furniturePlacementIssues(displayedDoc, o);
                 return (
                   <Group
                     key={o.id}
@@ -982,8 +982,8 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
             {L.walls && geo.walls.map(renderWall)}
             {L.openings && geo.openings.map(renderOpening)}
             {L.dimensions && geo.dimensions.map((d) => renderDimension(d, d.id))}
-            {doc.rooms.map(renderRoomLabel)}
-            {(props.showMeasurements ? doc.rooms : selection?.kind === "room" ? doc.rooms.filter((room) => room.id === selection.id) : []).map(renderRoomMeasurements)}
+            {displayedRooms.map(renderRoomLabel)}
+            {(props.showMeasurements ? displayedRooms : selection?.kind === "room" ? displayedRooms.filter((room) => room.id === selection.id) : []).map(renderRoomMeasurements)}
             {L.labels &&
               geo.labels.map((lb) => (
                 <Text
@@ -1090,7 +1090,7 @@ export const PlanCanvas = React.forwardRef<CanvasHandle, Props>(function PlanCan
           </Layer>
 
           <Layer listening={false}>{renderDraft()}</Layer>
-          {!drawing && cursor && (preview || roomPreview) && (
+          {!drawing && cursor && (preview || roomsPreview) && (
             <Layer listening={false}>
               {cursor.guides.map((gd, i) => <Line key={i} points={[gd.a.x, gd.a.y, gd.b.x, gd.b.y]} stroke={PLAN.guide} strokeWidth={px(1)} dash={[px(3), px(4)]} />)}
               <SnapGlyph p={cursor.point} kind={cursor.kind} px={px} />
@@ -1109,7 +1109,6 @@ const dot2 = (a: Pt, b: Pt) => a.x * b.x + a.y * b.y;
 function projectSigned(p: Pt, a: Pt, n: Pt) {
   return dot2(sub(p, a), n);
 }
-
 function LengthTag({ a, b, offset, px, text }: { a: Pt; b: Pt; offset: number; px: (n: number) => number; text: string }) {
   const n = perp(unit(sub(b, a)));
   const mid = add(lerp(a, b, 0.5), mul(n, offset));
@@ -1179,10 +1178,4 @@ function FurnitureDetail({ o }: { o: PlanObject }) {
   if (o.furnitureType === "shower") return <Group listening={false}><Line points={[8, 8, o.width - 8, o.height - 8]} stroke={stroke} strokeWidth={1.5} /><Line points={[o.width - 8, 8, 8, o.height - 8]} stroke={stroke} strokeWidth={1.5} /><Circle x={o.width / 2} y={o.height / 2} radius={8} stroke={stroke} strokeWidth={2} /></Group>;
   if (o.furnitureType === "hob") return <Group listening={false}>{[[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]].map(([x, y], i) => <Circle key={i} x={o.width * x} y={o.height * y} radius={Math.min(o.width, o.height) * 0.12} stroke={stroke} strokeWidth={1.5} />)}</Group>;
   return null;
-}
-
-function pointOnSegment(p: Pt, a: Pt, b: Pt) {
-  const cross = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x));
-  if (cross > Math.max(2, dist(a, b) * 0.005)) return false;
-  return p.x >= Math.min(a.x, b.x) - 1 && p.x <= Math.max(a.x, b.x) + 1 && p.y >= Math.min(a.y, b.y) - 1 && p.y <= Math.max(a.y, b.y) + 1;
 }

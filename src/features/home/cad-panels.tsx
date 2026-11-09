@@ -3,16 +3,17 @@
 import Link from "next/link";
 import * as React from "react";
 import { ArrowLeftRight, Copy, ExternalLink, FlipHorizontal2, RotateCw, Square, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  angleDeg, clampOpening, formatArea, formatLength, parseLength, polygonArea, reclampOpenings, setWallLength, wallLength, wallsFromPolygons,
+  angleDeg, clampOpening, formatArea, formatLength, openingConflicts, parseLength, polygonArea, reclampOpenings, wallLength, wallsFromPolygons,
   DOOR_STYLE_LABELS, DOOR_STYLES, type DoorStyle, type Geometry, type OpeningKind,
 } from "./cad";
 import type { Layers, LayerKey, Selection } from "./canvas";
 import { CommitInput, NudgePad, PanelSection } from "./edit-panels";
-import { furniturePlacementIssues, newId, resizeRoom, roomPolygon, ROOM_TYPES, type FloorDoc, type PlanObject, type RoomType } from "./model";
+import { furniturePlacementIssues, newId, resizeRoom, roomPolygon, ROOM_TYPES, setWallBoundaryLength, type FloorDoc, type PlanObject, type RoomType } from "./model";
 
 const cm = (v: string) => parseLength(v.includes("m") || v.includes("c") ? v : `${v}cm`);
 
@@ -43,6 +44,14 @@ export function CadProperties({
 }) {
   const g = doc.geometry;
   const setG = (next: Geometry) => onChange({ ...doc, geometry: next });
+  const commitBoundaryEdit = (candidate: FloorDoc) => {
+    const conflict = openingConflicts(candidate.geometry)[0];
+    if (!conflict) return onChange(candidate);
+    const name = conflict.opening.kind === "window" ? "window" : conflict.opening.kind === "door" ? "door" : "opening";
+    toast.error(`This wall is too short for its ${name}`, {
+      description: `It needs at least ${formatLength(conflict.requiredLength, { precise: true })}. Widen the wall or reduce the ${name} width first.`,
+    });
+  };
 
   if (!selection) {
     return (
@@ -69,7 +78,7 @@ export function CadProperties({
       <PanelSection title="Wall">
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-2">
-            <CommitInput id="wall-len" label="Length" value={(wallLength(w) / 100).toFixed(2)} suffix="m" onCommit={(v) => { const l = parseLength(v); if (l) setG(setWallLength(g, w.id, l)); }} />
+            <CommitInput id="wall-len" label="Length" value={(wallLength(w) / 100).toFixed(2)} suffix="m" onCommit={(v) => { const l = parseLength(v); if (l) commitBoundaryEdit(setWallBoundaryLength(doc, w.id, l)); }} />
             <CommitInput id="wall-th" label="Thickness" value={String(w.thickness)} suffix="cm" onCommit={(v) => { const t = cm(v); if (t && t >= 2 && t <= 100) setG({ ...g, walls: g.walls.map((x) => (x.id === w.id ? { ...x, thickness: t } : x)) }); }} />
           </div>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Thickness presets">
@@ -79,7 +88,7 @@ export function CadProperties({
               </button>
             ))}
           </div>
-          <p className="text-xs text-fg-muted">Angle {Math.round(angleDeg(w.a, w.b))}° · {count} opening{count === 1 ? "" : "s"}. Drag the square handles to move corners; joined walls follow.</p>
+          <p className="text-xs text-fg-muted">Angle {Math.round(angleDeg(w.a, w.b))}° · {count} opening{count === 1 ? "" : "s"}. Drag the centre handle to move the wall or the square handles to adjust its corners. Joined rooms follow.</p>
           <NudgePad onNudge={onNudge} />
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" onClick={() => setG({ ...g, walls: g.walls.map((x) => (x.id === w.id ? { ...x, a: x.b, b: x.a } : x)), openings: g.openings.map((o) => (o.wallId === w.id ? { ...o, offset: wallLength(w) - o.offset, hingeEnd: !o.hingeEnd } : o)) })}>
@@ -199,15 +208,15 @@ export function CadProperties({
             </NativeSelect>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <CommitInput id="room-width" label="Approx. width" value={(room.width / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) onChange(resizeRoom(doc, room.id, Math.round(n * 100), room.height)); }} />
-            <CommitInput id="room-depth" label="Approx. depth" value={(room.height / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) onChange(resizeRoom(doc, room.id, room.width, Math.round(n * 100))); }} />
+            <CommitInput id="room-width" label="Approx. width" value={(room.width / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) commitBoundaryEdit(resizeRoom(doc, room.id, Math.round(n * 100), room.height)); }} />
+            <CommitInput id="room-depth" label="Approx. depth" value={(room.height / 100).toFixed(1)} suffix="m" onCommit={(v) => { const n = Number(v); if (n >= 0.5) commitBoundaryEdit(resizeRoom(doc, room.id, room.width, Math.round(n * 100))); }} />
           </div>
           <dl className="grid grid-cols-2 gap-y-1 text-sm">
             <dt className="text-fg-muted">Area</dt><dd className="text-right tabular-nums">{illustrative ? "≈ " : ""}{formatArea(polygonArea(pts))}</dd>
             <dt className="text-fg-muted">Perimeter</dt><dd className="text-right tabular-nums">{formatLength(perimeter)}</dd>
             <dt className="text-fg-muted">Corners</dt><dd className="text-right tabular-nums">{pts.length}</dd>
           </dl>
-          <p className="text-xs text-fg-muted">Drag the round handles to reshape it; drag the room to move it.</p>
+          <p className="text-xs text-fg-muted">Drag a round handle to move that joined wall corner. The wall, neighbouring room and openings update together.</p>
           <NudgePad onNudge={onNudge} />
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" onClick={() => {

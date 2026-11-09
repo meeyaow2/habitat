@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { openingConflicts, rectPolygon, wallsFromPolygons } from "@/features/home/cad";
 import { docsEqual, historyReducer, HISTORY_LIMIT, initHistory } from "@/features/home/editor-store";
-import { alignRect, areaM2, boundsOf, furniturePlacementIssues, objectBounds, roomAt, roomLabelPlacement, scaleFloorProportionally, snap, validateDoc, type FloorDoc, type PlanObject, type RoomShape } from "@/features/home/model";
+import { alignRect, areaM2, boundsOf, furniturePlacementIssues, moveBoundaryCorner, moveWallBoundary, objectBounds, roomAt, roomLabelPlacement, scaleFloorProportionally, setWallBoundaryLength, snap, validateDoc, type FloorDoc, type PlanObject, type RoomShape } from "@/features/home/model";
 import { floorExtent, instantiateFloor, suggestedTemplate, TEMPLATES } from "@/features/home/templates";
 
 const room = (id: string, x: number, y: number, w: number, h: number): RoomShape => ({ id, name: id, roomType: "other", x, y, width: w, height: h, sortOrder: 0 });
@@ -80,6 +81,64 @@ describe("geometry", () => {
     const sofa: PlanObject = { id: "sofa", kind: "furniture", assetId: null, furnitureType: "sofa", label: "Sofa", x: first.x - 100, y: first.y - 50, width: 200, height: 100, rotation: 0 };
     const shifted = roomLabelPlacement(doc([living], [sofa]), living);
     expect({ x: shifted.x, y: shifted.y }).not.toEqual({ x: first.x, y: first.y });
+  });
+
+  it("moves walls, connected room fills and attached windows as one boundary edit", () => {
+    const kitchen = room("kitchen", 0, 0, 200, 200);
+    const yard = room("yard", 200, 0, 200, 200);
+    let sequence = 0;
+    const walls = wallsFromPolygons([rectPolygon(kitchen), rectPolygon(yard)], () => `wall-${sequence++}`);
+    const bottom = walls.find((wall) => wall.a.y === 200 && wall.b.y === 200 && Math.abs(wall.b.x - wall.a.x) === 400)!;
+    const source: FloorDoc = {
+      rooms: [kitchen, yard],
+      objects: [],
+      geometry: {
+        walls,
+        openings: [{ id: "window", wallId: bottom.id, kind: "window", offset: 300, width: 90, height: 120, sill: 90, flip: false, hingeEnd: false }],
+        dimensions: [], labels: [],
+      },
+    };
+
+    const deeper = moveWallBoundary(source, bottom.id, 0, 50);
+    expect(deeper.geometry.walls.find((wall) => wall.id === bottom.id)).toMatchObject({ a: { y: 250 }, b: { y: 250 } });
+    expect(deeper.geometry.openings[0]).toMatchObject({ wallId: bottom.id, width: 90, offset: 300 });
+    expect(deeper.rooms.map((candidate) => [candidate.id, candidate.height])).toEqual([["kitchen", 250], ["yard", 250]]);
+
+    const shared = deeper.geometry.walls.find((wall) => wall.a.x === 200 && wall.b.x === 200)!;
+    const widerKitchen = moveWallBoundary(deeper, shared.id, 50, 0);
+    expect(widerKitchen.rooms.find((candidate) => candidate.id === "kitchen")).toMatchObject({ width: 250 });
+    expect(widerKitchen.rooms.find((candidate) => candidate.id === "yard")).toMatchObject({ x: 250, width: 150 });
+
+    let history = historyReducer(initHistory(source), { type: "commit", doc: deeper });
+    history = historyReducer(history, { type: "undo" });
+    expect(docsEqual(history.present, source)).toBe(true);
+  });
+
+  it("makes a room corner handle split and move the actual joined wall corner", () => {
+    const kitchen = room("kitchen", 0, 0, 200, 200);
+    const yard = room("yard", 200, 0, 200, 200);
+    let sequence = 0;
+    const source: FloorDoc = {
+      rooms: [kitchen, yard], objects: [],
+      geometry: { walls: wallsFromPolygons([rectPolygon(kitchen), rectPolygon(yard)], () => `wall-${sequence++}`), openings: [], dimensions: [], labels: [] },
+    };
+    const resized = moveBoundaryCorner(source, { x: 200, y: 200 }, { x: 200, y: 250 });
+    expect(resized.rooms.every((candidate) => candidate.height === 250)).toBe(true);
+    expect(resized.geometry.walls.some((wall) => (wall.a.x === 200 && wall.a.y === 250) || (wall.b.x === 200 && wall.b.y === 250))).toBe(true);
+  });
+
+  it("preserves opening width and reports when an exact wall length is too short", () => {
+    const source: FloorDoc = {
+      rooms: [room("room", 0, 0, 300, 200)], objects: [],
+      geometry: {
+        walls: [{ id: "wall", a: { x: 0, y: 0 }, b: { x: 300, y: 0 }, thickness: 10 }],
+        openings: [{ id: "window", wallId: "wall", kind: "window", offset: 150, width: 120, height: 120, sill: 90, flip: false, hingeEnd: false }],
+        dimensions: [], labels: [],
+      },
+    };
+    const shortened = setWallBoundaryLength(source, "wall", 100);
+    expect(shortened.geometry.openings[0].width).toBe(120);
+    expect(openingConflicts(shortened.geometry)).toHaveLength(1);
   });
 });
 

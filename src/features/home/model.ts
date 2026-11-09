@@ -10,7 +10,7 @@ export type RoomType =
   | "living" | "dining" | "kitchen" | "bedroom" | "bathroom" | "balcony" | "utility"
   | "study" | "storage" | "corridor" | "household_shelter" | "garden" | "garage" | "other";
 
-import { bbox, doorSymbol, EMPTY_GEOMETRY, isSimplePolygon, moveCorner, moveWall, pointAtLength, pointInPolygon, polygonArea, reclampOpenings, rectPolygon, samePt, type Geometry, type Pt } from "./cad";
+import { bbox, doorSymbol, EMPTY_GEOMETRY, isSimplePolygon, moveCorner, moveWall, pointAtLength, pointInPolygon, polygonArea, reclampOpenings, rectPolygon, samePt, splitWallAt, type Geometry, type Pt } from "./cad";
 
 export type RoomShape = {
   id: string;
@@ -75,7 +75,13 @@ const pointOnBoundary = (point: Pt, a: Pt, b: Pt, tolerance = 1) => {
 /** Move a joined wall corner and every room corner that uses it. */
 export function moveBoundaryCorner(doc: FloorDoc, from: Pt, to: Pt): FloorDoc {
   if (doc.rooms.some((room) => room.locked && roomPolygon(room).some((point) => samePt(point, from, 1)))) return doc;
-  const geometry = moveCorner(doc.geometry, from, to);
+  let baseGeometry = doc.geometry;
+  for (const wall of [...baseGeometry.walls]) {
+    if (!samePt(wall.a, from, 1) && !samePt(wall.b, from, 1) && pointOnBoundary(from, wall.a, wall.b)) {
+      baseGeometry = splitWallAt(baseGeometry, wall.id, from, newId);
+    }
+  }
+  const geometry = moveCorner(baseGeometry, from, to);
   const rooms = doc.rooms.map((room) => {
     const points = roomPolygon(room);
     const next = points.map((point) => samePt(point, from, 1) ? to : point);

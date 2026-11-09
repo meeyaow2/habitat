@@ -11,11 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 import { CadProperties } from "@/features/home/cad-panels";
-import { moveWall, polygonArea, rectPolygon, wallsFromPolygons } from "@/features/home/cad";
+import { polygonArea, rectPolygon, wallsFromPolygons } from "@/features/home/cad";
 import type { CanvasHandle, DraftSettings, Layers, MarkerInfo, Selection, Tool } from "@/features/home/canvas";
 import { AddPanel, LayersPanel, PanelSection } from "@/features/home/edit-panels";
 import { historyReducer, initHistory } from "@/features/home/editor-store";
-import { boundsOf, docBounds, furnitureSpec, moveRoom, newId, placeAtCentre, roomPolygon, scaleFloorProportionally, type FloorDoc, type PlanObject, type RoomType } from "@/features/home/model";
+import { boundsOf, docBounds, furnitureSpec, moveRoom, moveWallBoundary, newId, placeAtCentre, roomPolygon, scaleFloorProportionally, type FloorDoc, type PlanObject, type RoomType } from "@/features/home/model";
 import { getTemplate } from "@/features/home/templates";
 import { GuestApplianceDetails } from "./appliance-details";
 import { addGuestAsset, createSampleGuestHome, GUEST_KEYS, isGuestHome, type GuestHome } from "./data";
@@ -162,7 +162,7 @@ export function GuestEditor({ initialHome, initialEdit = false }: { initialHome:
     if (!selection) return;
     if (selection.kind === "object") commit({ ...doc, objects: doc.objects.map((o) => o.id === selection.id ? { ...o, x: o.x + dx, y: o.y + dy } : o) });
     if (selection.kind === "room") commit({ ...doc, rooms: doc.rooms.map((r) => r.id === selection.id && !r.locked ? moveRoom(r, dx, dy) : r) });
-    if (selection.kind === "wall") commit({ ...doc, geometry: moveWall(doc.geometry, selection.id, dx, dy) });
+    if (selection.kind === "wall") commit(moveWallBoundary(doc, selection.id, dx, dy));
   };
 
   const addAppliance = (categoryId: string) => {
@@ -223,7 +223,7 @@ export function GuestEditor({ initialHome, initialEdit = false }: { initialHome:
           <span className="mx-2 h-5 w-px shrink-0 bg-line" />
           <button type="button" onClick={() => setShowDimensionControls((value) => !value)} aria-pressed={showDimensionControls} className={cn("flex h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm", showDimensionControls ? "bg-accent-soft text-accent-soft-fg" : "text-fg-muted hover:bg-surface-muted")}><Ruler className="size-4" /> Adjust dimensions</button>
           <button type="button" onClick={() => setShowMeasurements((value) => !value)} aria-pressed={showMeasurements} className={cn("flex h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm", showMeasurements ? "bg-accent-soft text-accent-soft-fg" : "text-fg-muted hover:bg-surface-muted")}><ScanLine className="size-4" /> Show measurements</button>
-          <span className="ml-auto hidden text-xs text-fg-subtle lg:block">Structural walls and the household shelter are fixed</span>
+          <span className="ml-auto hidden text-xs text-fg-subtle lg:block">Household shelter walls stay fixed</span>
         </div>
       )}
 
