@@ -1,9 +1,10 @@
-import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Wordmark } from "@/components/brand";
 import { HomeStarter } from "@/features/guest/home-starter";
 
 export default function Landing() {
+  const basePath = process.env.PAGES_BASE_PATH ?? "";
+
   return (
     <div className="min-h-dvh bg-bg">
       <header className="border-b border-line bg-surface/90">
@@ -16,9 +17,9 @@ export default function Landing() {
         <div className="max-w-3xl">
           <h1 className="text-3xl font-semibold tracking-tight text-fg sm:text-5xl">Where should the sofa go?</h1>
           <p className="mt-3 text-base leading-relaxed text-fg-muted sm:text-lg">Pick a floor plan that’s close to your home, then move things around to see what feels right.</p>
-          <Link href="/home?guest=sample&edit=1" className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-accent underline-offset-4 hover:underline">
+          <a href={`${basePath}/home/?guest=sample&edit=1`} className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-accent underline-offset-4 hover:underline">
             Try a furnished sample <ArrowRight className="size-4" aria-hidden />
-          </Link>
+          </a>
         </div>
 
         <div className="mt-7 sm:mt-9">
