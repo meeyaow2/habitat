@@ -110,6 +110,18 @@ npm run build
 npm run start
 ```
 
+### Deploy the guest planner to GitHub Pages
+
+GitHub Pages can host the browser-only homepage, starter layouts, furnished sample, and guest editor. It cannot run Habitat's account, database, API, upload, email, or scheduled-job features.
+
+The repository includes a separate static build and a Pages workflow:
+
+```bash
+npm run build:pages
+```
+
+The export is written to `github-pages/out` and uses `/habitat` as its path prefix in GitHub Actions. Push to `main`, then choose **GitHub Actions** as the source under **Settings → Pages** if it is not already selected. The workflow publishes the site at [https://meeyaow2.github.io/habitat/](https://meeyaow2.github.io/habitat/).
+
 ### Run the full local application
 
 Start PostgreSQL with a `habitat` database, for example:
@@ -169,6 +181,7 @@ The commands below match `package.json`.
 | --- | --- |
 | `npm run dev` | Starts the Next.js development server. |
 | `npm run build` | Creates an optimized production build. |
+| `npm run build:pages` | Creates the static guest-planner export used by GitHub Pages. |
 | `npm run start` | Runs the production build. |
 | `npm run typecheck` | Runs TypeScript without emitting files. |
 | `npm run lint` | Runs ESLint. |

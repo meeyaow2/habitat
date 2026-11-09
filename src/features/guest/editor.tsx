@@ -211,7 +211,7 @@ export function GuestEditor({ initialHome, initialEdit = false }: { initialHome:
           <p className="px-2 text-xs text-fg-subtle">{home.kind === "sample" ? "Editable sample · separate from your home" : savedAt}</p>
         </div>
         <Segmented value={mode} onChange={switchMode} label="Editor mode" options={[{ value: "view", label: "View", icon: <Eye /> }, { value: "edit", label: "Edit layout", icon: <Pencil /> }]} />
-        {home.kind === "sample" ? <Button variant="ghost" size="sm" onClick={() => setResetOpen(true)}><RotateCcw aria-hidden /> Reset sample</Button> : <Button asChild variant="ghost" size="sm"><Link href="/onboarding"><House aria-hidden /> New home</Link></Button>}
+        {home.kind === "sample" ? <Button variant="ghost" size="sm" onClick={() => setResetOpen(true)}><RotateCcw aria-hidden /> Reset sample</Button> : <Button asChild variant="ghost" size="sm"><Link href="/"><House aria-hidden /> New home</Link></Button>}
       </header>
 
       {mode === "edit" && (
